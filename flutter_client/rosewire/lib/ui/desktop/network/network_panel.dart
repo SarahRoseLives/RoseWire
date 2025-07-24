@@ -1,27 +1,64 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../../../services/ssh_chat_service.dart';
 import '../rosewire_desktop.dart';
 
-// This is a mockup panel showing network stats.
-// Later, it can be replaced with live data from the network.
+class NetworkPanel extends StatefulWidget {
+  final SshChatService chatService;
+  const NetworkPanel({super.key, required this.chatService});
 
-class NetworkPanel extends StatelessWidget {
-  const NetworkPanel({super.key});
+  @override
+  State<NetworkPanel> createState() => _NetworkPanelState();
+}
+
+class _NetworkPanelState extends State<NetworkPanel> {
+  Map<String, dynamic>? _stats;
+  bool _loading = true;
+  StreamSubscription? _statsSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _statsSub = widget.chatService.messages.listen((msg) {
+      if (msg.startsWith("[STATS] ")) {
+        final payload = msg.substring(8);
+        try {
+          final data = json.decode(payload) as Map<String, dynamic>;
+          setState(() {
+            _stats = data;
+            _loading = false;
+          });
+        } catch (e) {
+          setState(() {
+            _stats = null;
+            _loading = false;
+          });
+        }
+      }
+    });
+
+    // Request stats
+    widget.chatService.sendMessage("/stats");
+    setState(() {
+      _loading = true;
+    });
+  }
+
+  @override
+  void dispose() {
+    _statsSub?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Example mock data
-    final List<Map<String, dynamic>> users = [
-      {"nickname": "musicfan01", "status": "Online"},
-      {"nickname": "audioenthusiast", "status": "Online"},
-      {"nickname": "sshshare", "status": "Idle"},
-      {"nickname": "rosewirebot", "status": "Online"},
-      {"nickname": "SarahRoseLives", "status": "Online"},
-    ];
-
-    final int relayServers = 5;
-    final int totalUsers = users.length;
-    final int totalTransfers = 7;
-    final int activeTransfers = 2;
+    final stats = _stats;
+    final users = stats?['users'] as List<dynamic>? ?? [];
+    final relayServers = stats?['relayServers'] ?? 1;
+    final totalUsers = stats?['totalUsers'] ?? users.length;
+    final totalTransfers = stats?['totalTransfers'] ?? 0;
+    final activeTransfers = stats?['activeTransfers'] ?? 0;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
@@ -37,7 +74,6 @@ class NetworkPanel extends StatelessWidget {
             ),
           ),
           SizedBox(height: 18),
-
           Card(
             color: roseGray.withOpacity(0.85),
             shape: RoundedRectangleBorder(
@@ -89,42 +125,44 @@ class NetworkPanel extends StatelessWidget {
           ),
           SizedBox(height: 12),
           Expanded(
-            child: ListView.builder(
-              itemCount: users.length,
-              itemBuilder: (context, idx) {
-                final user = users[idx];
-                final statusColor =
-                    user["status"] == "Online" ? roseGreen : roseWhite.withOpacity(0.6);
-                return Card(
-                  color: roseGray.withOpacity(0.8),
-                  elevation: 2,
-                  margin: EdgeInsets.symmetric(vertical: 5),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+            child: _loading
+                ? Center(child: CircularProgressIndicator())
+                : ListView.builder(
+                    itemCount: users.length,
+                    itemBuilder: (context, idx) {
+                      final user = users[idx] as Map<String, dynamic>;
+                      final statusColor =
+                          user["status"] == "Online" ? roseGreen : roseWhite.withOpacity(0.6);
+                      return Card(
+                        color: roseGray.withOpacity(0.8),
+                        elevation: 2,
+                        margin: EdgeInsets.symmetric(vertical: 5),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: rosePink,
+                            child: Text(
+                              user["nickname"].toString().substring(0, 1).toUpperCase(),
+                              style: TextStyle(color: roseWhite, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          title: Text(
+                            user["nickname"].toString(),
+                            style: TextStyle(color: roseWhite, fontWeight: FontWeight.bold),
+                          ),
+                          trailing: Text(
+                            user["status"].toString(),
+                            style: TextStyle(
+                              color: statusColor,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
                   ),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: rosePink,
-                      child: Text(
-                        user["nickname"].substring(0, 1).toUpperCase(),
-                        style: TextStyle(color: roseWhite, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    title: Text(
-                      user["nickname"],
-                      style: TextStyle(color: roseWhite, fontWeight: FontWeight.bold),
-                    ),
-                    trailing: Text(
-                      user["status"],
-                      style: TextStyle(
-                        color: statusColor,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
           ),
         ],
       ),

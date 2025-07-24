@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -86,7 +87,7 @@ func (c *ChatClient) readLoop() {
 			continue
 		}
 
-		// ** NEW: Handle /share command **
+		// Handle /share command
 		if strings.HasPrefix(text, "/share ") {
 			payload := strings.TrimPrefix(text, "/share ")
 			files, err := ParseShareCommand(payload)
@@ -95,7 +96,7 @@ func (c *ChatClient) readLoop() {
 			} else {
 				c.fileRegistry.UpdateUserFiles(c.nickname, files)
 			}
-		// ** NEW: Handle /search command **
+		// Handle /search command
 		} else if strings.HasPrefix(text, "/search ") {
 			query := strings.TrimPrefix(text, "/search ")
 			results := c.fileRegistry.Search(query)
@@ -109,7 +110,7 @@ func (c *ChatClient) readLoop() {
 			payload := strings.Join(parts, "|")
 			// Send results back to the originating client only
 			c.outgoing <- "[SEARCH] " + payload
-		// ** NEW: Handle /top command **
+		// Handle /top command
 		} else if strings.HasPrefix(text, "/top") {
 			// Optional: parse limit, e.g. "/top 10"
 			limit := 10
@@ -128,6 +129,31 @@ func (c *ChatClient) readLoop() {
 			}
 			payload := strings.Join(resultParts, "|")
 			c.outgoing <- "[SEARCH] " + payload
+		// Handle /stats command
+		} else if strings.HasPrefix(text, "/stats") {
+			// Provide network stats as JSON
+			c.hub.mu.Lock()
+			var users []map[string]string
+			for nick := range c.hub.clients {
+				users = append(users, map[string]string{
+					"nickname": nick,
+					"status":   "Online",
+				})
+			}
+			c.hub.mu.Unlock()
+			stats := map[string]interface{}{
+				"users":           users,
+				"relayServers":    1,
+				"totalUsers":      len(users),
+				"totalTransfers":  0,
+				"activeTransfers": 0,
+			}
+			jsonPayload, err := json.Marshal(stats)
+			if err != nil {
+				c.outgoing <- "[STATS] {}"
+			} else {
+				c.outgoing <- "[STATS] " + string(jsonPayload)
+			}
 		} else {
 			// Broadcast regular chat message to everyone
 			msg := fmt.Sprintf("[%s] %s: %s", time.Now().Format("15:04"), c.nickname, text)
@@ -150,7 +176,7 @@ func (c *ChatClient) writeLoop() {
 
 func (c *ChatClient) Close() {
 	c.once.Do(func() {
-		// ** NEW: Clean up user files on disconnect **
+		// Clean up user files on disconnect
 		c.fileRegistry.RemoveUser(c.nickname)
 		c.hub.part(c.nickname)
 		close(c.done)

@@ -1,6 +1,8 @@
 import 'dart:io';
+import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../services/ssh_chat_service.dart';
 import 'search/search_panel.dart';
@@ -46,8 +48,9 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
       keyPath: widget.keyPath,
     );
 
+    _restoreLibraryAndShare();
+
     _panels = [
-      // Pass the service to SearchPanel
       SearchPanel(chatService: _sshChatService),
       TransfersPanel(),
       LibraryPanel(
@@ -58,10 +61,32 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
         nickname: widget.nickname,
         chatService: _sshChatService,
       ),
-      NetworkPanel(),
+      NetworkPanel(chatService: _sshChatService),
       SettingsPanel(),
-      AboutPanel(), // About panel is still in the list, but not on the rail.
+      AboutPanel(),
     ];
+  }
+
+  Future<void> _restoreLibraryAndShare() async {
+    try {
+      final dir = await getApplicationSupportDirectory();
+      final configFile = File('${dir.path}/${widget.nickname}_rosewire_library.json');
+      if (await configFile.exists()) {
+        final config = jsonDecode(await configFile.readAsString());
+        final folderPath = config["folderPath"] as String?;
+        if (folderPath != null && folderPath.isNotEmpty) {
+          final files = await Directory(folderPath)
+              .list()
+              .where((f) => f is File)
+              .toList();
+          _libraryFolder = folderPath;
+          _libraryFiles = files.cast<File>();
+          _shareLibraryToServer();
+        }
+      }
+    } catch (e) {
+      // Ignore errors, let user select manually later
+    }
   }
 
   void _handleLibraryChanged(String folderPath, List<File> files) {
@@ -71,6 +96,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
   }
 
   void _shareLibraryToServer() {
+    if (_libraryFiles.isEmpty) return;
     final payload = _libraryFiles.map((file) {
       final name = file.path.split(Platform.pathSeparator).last.replaceAll('|', '_');
       final size = file.lengthSync();
@@ -127,7 +153,6 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
         children: [
           NavigationRail(
             backgroundColor: roseGray.withOpacity(0.95),
-            // Clamp NavigationRail selectedIndex to valid range
             selectedIndex: _selectedPanelIndex.clamp(0, _destinations.length - 1),
             onDestinationSelected: (idx) => setState(() => _selectedPanelIndex = idx),
             labelType: NavigationRailLabelType.all,
@@ -173,7 +198,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
                           children: [
                             _RoseWireHeader(
                               nickname: widget.nickname,
-                              onAboutTap: () => setState(() => _selectedPanelIndex = 6), // About panel index
+                              onAboutTap: () => setState(() => _selectedPanelIndex = 6),
                             ),
                             Expanded(child: _panels[_selectedPanelIndex]),
                             _RoseWireStatusBar(nickname: widget.nickname),
