@@ -2,11 +2,12 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"rosewire/login"
 	"rosewire/home"
+	"rosewire/login"
 )
 
 type appState int
@@ -17,11 +18,11 @@ const (
 )
 
 type model struct {
-	state     appState
-	login     login.Model
-	home      home.Model
-	width     int
-	height    int
+	state  appState
+	login  login.Model
+	home   home.Model
+	width  int
+	height int
 }
 
 // Initialize app with login screen
@@ -45,9 +46,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		lm, cmd := m.login.Update(msg)
 		m.login = lm
 		if m.login.Done {
-			// On login complete, switch to home UI
+			// On login complete, create dirs and connect to services
+			if err := home.EnsureUserDirs(); err != nil {
+				// A real app should display this error gracefully
+				fmt.Printf("Fatal: Could not create user directories: %v\n", err)
+				return m, tea.Quit
+			}
+
+			// Create and connect chat client
+			chatClient := home.NewChatClient(m.login.Nickname, m.login.SelectedKey, "127.0.0.1:2222")
+			go func() {
+				err := chatClient.Connect()
+				if err != nil {
+					// Log error; a more robust solution would use a tea.Msg to show in UI
+					log.Printf("Chat connection failed: %v", err)
+				}
+			}()
+
+			// Switch to home UI, passing the connected client
 			m.state = stateHome
-			m.home = home.NewModel(m.login.Nickname, m.login.SelectedKey)
+			m.home = home.NewModel(m.login.Nickname, m.login.SelectedKey, chatClient)
 			return m, m.home.Init()
 		}
 		return m, cmd

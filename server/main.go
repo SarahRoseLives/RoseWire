@@ -40,7 +40,6 @@ func LoadNickDB(path string) (*NickDB, error) {
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		// Each line: nickname base64_pubkey
 		parts := strings.SplitN(scanner.Text(), " ", 2)
 		if len(parts) != 2 {
 			continue
@@ -96,7 +95,6 @@ func ensureHostKey(path string) (ssh.Signer, error) {
 	return ssh.ParsePrivateKey(keyBytes)
 }
 
-// Parse nickname from the "user" field of the SSH connection
 func parseNickname(conn ssh.ConnMetadata) string {
 	return conn.User()
 }
@@ -113,8 +111,8 @@ func main() {
 		log.Fatalf("Failed to load nick DB: %v", err)
 	}
 
-	// Chat hub
-	chatHub := NewChatHub()
+	fileRegistry := NewFileRegistry()
+	chatHub := NewChatHub(fileRegistry)
 
 	config := &ssh.ServerConfig{
 		NoClientAuth: false,
@@ -123,12 +121,10 @@ func main() {
 			if nick == "" {
 				return nil, fmt.Errorf("nickname missing")
 			}
-			// Register or check key for nickname
 			err := nickDB.Register(nick, pubKey)
 			if err != nil {
 				return nil, err
 			}
-			// Save DB after registration
 			if err := nickDB.Save(nickDBFile); err != nil {
 				return nil, err
 			}
@@ -184,25 +180,70 @@ func handleConn(nConn net.Conn, config *ssh.ServerConfig, chatHub *ChatHub) {
 	}
 }
 
+// Helper struct for parsing "exec" request payloads.
+type execPayload struct {
+	Command string
+}
+
 func handleSessionChannel(channel ssh.Channel, requests <-chan *ssh.Request, nickname string, chatHub *ChatHub) {
-	defer channel.Close()
-	for req := range requests {
-		switch req.Type {
-		case "shell":
-			req.Reply(true, nil)
-			io.WriteString(channel, "RoseWire relay shell not implemented.\n")
-		case "subsystem":
-			// Look for "chat" subsystem
-			if string(req.Payload[4:]) == "chat" {
-				req.Reply(true, nil)
-				chatHub.Join(nickname, channel)
-				return // chatHub handles channel lifetime
-			} else {
-				req.Reply(false, nil)
-			}
-		default:
-			req.Reply(false, nil)
-		}
+	req, ok := <-requests
+	if !ok {
+		return
 	}
-	channel.Write([]byte(fmt.Sprintf("Welcome %s! RoseWire relay ready.\n", nickname)))
+
+	switch req.Type {
+	case "shell":
+		req.Reply(false, nil)
+		io.WriteString(channel, "RoseWire relay shell not implemented.\n")
+		channel.Close()
+
+	// --------------------- FIX START ---------------------
+	// Handle 'exec' requests, which is how dartssh2 sends subsystem requests.
+	case "exec":
+		var payload execPayload
+		if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
+			log.Printf("Warning: malformed exec payload from %s", nickname)
+			req.Reply(false, nil)
+			channel.Close()
+			return
+		}
+
+		if payload.Command == "subsystem:chat" {
+			log.Printf("User '%s' approved for 'chat' via exec request", nickname)
+			req.Reply(true, nil)
+			chatHub.Join(nickname, channel)
+
+			// Drain remaining requests to keep the session alive.
+			for req := range requests {
+				if req.WantReply {
+					req.Reply(false, nil)
+				}
+			}
+			return // Exit when the client disconnects.
+		}
+		// Fallthrough for any other exec command.
+
+	// ---------------------- FIX END ----------------------
+
+	case "subsystem":
+		// This case is kept for compatibility with other clients (e.g., OpenSSH).
+		if string(req.Payload[4:]) == "chat" {
+			log.Printf("User '%s' approved for 'chat' subsystem", nickname)
+			req.Reply(true, nil)
+			chatHub.Join(nickname, channel)
+			for req := range requests {
+				if req.WantReply {
+					req.Reply(false, nil)
+				}
+			}
+			return // Exits when the client disconnects.
+		}
+		// Fallthrough for unknown subsystems.
+		fallthrough
+
+	default:
+		log.Printf("User '%s' requested unknown request type: %s", nickname, req.Type)
+		req.Reply(false, nil)
+		channel.Close()
+	}
 }
