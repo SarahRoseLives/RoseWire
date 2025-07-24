@@ -113,6 +113,9 @@ func main() {
 		log.Fatalf("Failed to load nick DB: %v", err)
 	}
 
+	// Chat hub
+	chatHub := NewChatHub()
+
 	config := &ssh.ServerConfig{
 		NoClientAuth: false,
 		PublicKeyCallback: func(meta ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
@@ -150,11 +153,11 @@ func main() {
 			log.Printf("Failed to accept: %v", err)
 			continue
 		}
-		go handleConn(nConn, config)
+		go handleConn(nConn, config, chatHub)
 	}
 }
 
-func handleConn(nConn net.Conn, config *ssh.ServerConfig) {
+func handleConn(nConn net.Conn, config *ssh.ServerConfig, chatHub *ChatHub) {
 	defer nConn.Close()
 	sshConn, chans, reqs, err := ssh.NewServerConn(nConn, config)
 	if err != nil {
@@ -177,18 +180,29 @@ func handleConn(nConn net.Conn, config *ssh.ServerConfig) {
 			log.Printf("Could not accept channel: %v", err)
 			continue
 		}
-		go func() {
-			defer channel.Close()
-			channel.Write([]byte(fmt.Sprintf("Welcome %s! RoseWire relay ready.\n", nickname)))
-			for req := range requests {
-				switch req.Type {
-				case "shell":
-					req.Reply(true, nil)
-					io.WriteString(channel, "RoseWire relay shell not implemented.\n")
-				default:
-					req.Reply(false, nil)
-				}
-			}
-		}()
+		go handleSessionChannel(channel, requests, nickname, chatHub)
 	}
+}
+
+func handleSessionChannel(channel ssh.Channel, requests <-chan *ssh.Request, nickname string, chatHub *ChatHub) {
+	defer channel.Close()
+	for req := range requests {
+		switch req.Type {
+		case "shell":
+			req.Reply(true, nil)
+			io.WriteString(channel, "RoseWire relay shell not implemented.\n")
+		case "subsystem":
+			// Look for "chat" subsystem
+			if string(req.Payload[4:]) == "chat" {
+				req.Reply(true, nil)
+				chatHub.Join(nickname, channel)
+				return // chatHub handles channel lifetime
+			} else {
+				req.Reply(false, nil)
+			}
+		default:
+			req.Reply(false, nil)
+		}
+	}
+	channel.Write([]byte(fmt.Sprintf("Welcome %s! RoseWire relay ready.\n", nickname)))
 }
