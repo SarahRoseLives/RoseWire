@@ -1,11 +1,13 @@
 import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+
 import '../../services/ssh_chat_service.dart';
 import 'search/search_panel.dart';
 import 'transfers/transfers_panel.dart';
 import 'library/library_panel.dart';
 import 'chat/chat_panel.dart';
+import 'network/network_panel.dart';
 import 'settings/settings_panel.dart';
 import 'about/about_panel.dart';
 
@@ -27,7 +29,8 @@ class RoseWireDesktop extends StatefulWidget {
 }
 
 class _RoseWireDesktopState extends State<RoseWireDesktop> {
-  int _selectedIndex = 3; // Default to chat panel
+  int _selectedPanelIndex = 3; // Default to chat panel
+
   late final SshChatService _sshChatService;
   String? _libraryFolder;
   List<File> _libraryFiles = [];
@@ -44,7 +47,8 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
     );
 
     _panels = [
-      SearchPanel(),
+      // Pass the service to SearchPanel
+      SearchPanel(chatService: _sshChatService),
       TransfersPanel(),
       LibraryPanel(
         nickname: widget.nickname,
@@ -54,8 +58,9 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
         nickname: widget.nickname,
         chatService: _sshChatService,
       ),
+      NetworkPanel(),
       SettingsPanel(),
-      AboutPanel(),
+      AboutPanel(), // About panel is still in the list, but not on the rail.
     ];
   }
 
@@ -66,7 +71,6 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
   }
 
   void _shareLibraryToServer() {
-    // Format: /share file:size:isDir|file2:size2:isDir2 ...
     final payload = _libraryFiles.map((file) {
       final name = file.path.split(Platform.pathSeparator).last.replaceAll('|', '_');
       final size = file.lengthSync();
@@ -104,15 +108,16 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
       label: Text('Chat'),
     ),
     NavigationRailDestination(
+      icon: Icon(Icons.cloud),
+      selectedIcon: Icon(Icons.cloud, color: rosePink),
+      label: Text('Network'),
+    ),
+    NavigationRailDestination(
       icon: Icon(Icons.settings),
       selectedIcon: Icon(Icons.settings, color: rosePink),
       label: Text('Settings'),
     ),
-    NavigationRailDestination(
-      icon: Icon(Icons.info_outline),
-      selectedIcon: Icon(Icons.info_outline, color: rosePink),
-      label: Text('About'),
-    ),
+    // About is REMOVED from the NavigationRail
   ];
 
   @override
@@ -122,8 +127,9 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
         children: [
           NavigationRail(
             backgroundColor: roseGray.withOpacity(0.95),
-            selectedIndex: _selectedIndex,
-            onDestinationSelected: (idx) => setState(() => _selectedIndex = idx),
+            // Clamp NavigationRail selectedIndex to valid range
+            selectedIndex: _selectedPanelIndex.clamp(0, _destinations.length - 1),
+            onDestinationSelected: (idx) => setState(() => _selectedPanelIndex = idx),
             labelType: NavigationRailLabelType.all,
             leading: Padding(
               padding: const EdgeInsets.all(12.0),
@@ -165,8 +171,11 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            _RoseWireHeader(nickname: widget.nickname),
-                            Expanded(child: _panels[_selectedIndex]),
+                            _RoseWireHeader(
+                              nickname: widget.nickname,
+                              onAboutTap: () => setState(() => _selectedPanelIndex = 6), // About panel index
+                            ),
+                            Expanded(child: _panels[_selectedPanelIndex]),
                             _RoseWireStatusBar(nickname: widget.nickname),
                           ],
                         ),
@@ -185,7 +194,9 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
 
 class _RoseWireHeader extends StatelessWidget {
   final String nickname;
-  const _RoseWireHeader({required this.nickname});
+  final VoidCallback onAboutTap;
+  const _RoseWireHeader({required this.nickname, required this.onAboutTap});
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -237,12 +248,12 @@ class _RoseWireHeader extends StatelessWidget {
               fontSize: 16,
             ),
           ),
-          SizedBox(width: 10),
-          Icon(Icons.search_rounded, color: roseWhite.withOpacity(0.3)),
-          SizedBox(width: 10),
-          Icon(Icons.cloud, color: roseWhite.withOpacity(0.3)),
-          SizedBox(width: 10),
-          Icon(Icons.settings, color: roseWhite.withOpacity(0.3)),
+          SizedBox(width: 12),
+          IconButton(
+            icon: Icon(Icons.info_outline, color: roseWhite.withOpacity(0.9)),
+            tooltip: "About",
+            onPressed: onAboutTap,
+          ),
         ],
       ),
     );
@@ -252,6 +263,7 @@ class _RoseWireHeader extends StatelessWidget {
 class _RoseWireStatusBar extends StatelessWidget {
   final String nickname;
   const _RoseWireStatusBar({required this.nickname});
+
   @override
   Widget build(BuildContext context) {
     return Container(

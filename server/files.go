@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,6 +80,36 @@ func (r *FileRegistry) Search(query string) []SearchResult {
 	}
 	log.Printf("Search for '%s' returned %d results.", query, len(results))
 	return results
+}
+
+// TopFiles returns up to N largest files shared across all users.
+func (r *FileRegistry) TopFiles(limit int) []SearchResult {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var allFiles []SearchResult
+	for nickname, files := range r.files {
+		for _, file := range files {
+			if !file.IsDir {
+				allFiles = append(allFiles, SearchResult{
+					FileName: file.Name,
+					Size:     file.Size,
+					Peer:     nickname,
+				})
+			}
+		}
+	}
+
+	sort.Slice(allFiles, func(i, j int) bool {
+		// Sort descending by size
+		return allFiles[i].Size > allFiles[j].Size
+	})
+
+	if len(allFiles) > limit {
+		allFiles = allFiles[:limit]
+	}
+
+	return allFiles
 }
 
 // ParseShareCommand decodes a command string like "/share file:size:isDir|file2:size2:isDir2"

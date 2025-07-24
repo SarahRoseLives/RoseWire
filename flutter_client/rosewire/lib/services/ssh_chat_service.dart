@@ -104,8 +104,15 @@ class SshChatService {
     }
   }
 
+  /// Performs a case-insensitive file search.
   void searchFiles(String query) {
-    sendMessage("/search $query");
+    // Normalize to lowercase for case-insensitive search
+    sendMessage("/search ${query.toLowerCase()}");
+  }
+
+  /// Requests top files from the network.
+  void fetchTopFiles() {
+    sendMessage("/top");
   }
 
   void dispose() {

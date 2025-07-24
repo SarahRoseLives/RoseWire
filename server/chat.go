@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -107,6 +108,25 @@ func (c *ChatClient) readLoop() {
 			}
 			payload := strings.Join(parts, "|")
 			// Send results back to the originating client only
+			c.outgoing <- "[SEARCH] " + payload
+		// ** NEW: Handle /top command **
+		} else if strings.HasPrefix(text, "/top") {
+			// Optional: parse limit, e.g. "/top 10"
+			limit := 10
+			parts := strings.Fields(text)
+			if len(parts) == 2 {
+				if v, err := strconv.Atoi(parts[1]); err == nil && v > 0 {
+					limit = v
+				}
+			}
+			results := c.fileRegistry.TopFiles(limit)
+
+			var resultParts []string
+			for _, res := range results {
+				part := fmt.Sprintf("%s:%d:%s", res.FileName, res.Size, res.Peer)
+				resultParts = append(resultParts, part)
+			}
+			payload := strings.Join(resultParts, "|")
 			c.outgoing <- "[SEARCH] " + payload
 		} else {
 			// Broadcast regular chat message to everyone
