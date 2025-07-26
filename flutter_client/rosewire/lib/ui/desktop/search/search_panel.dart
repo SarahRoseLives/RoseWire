@@ -5,7 +5,6 @@ import '../../../models/search_result.dart';
 import '../rosewire_desktop.dart';
 
 class SearchPanel extends StatefulWidget {
-  // Receive the chat service
   final SshChatService chatService;
   const SearchPanel({super.key, required this.chatService});
 
@@ -18,12 +17,11 @@ class _SearchPanelState extends State<SearchPanel> {
   StreamSubscription? _searchSubscription;
   List<SearchResult> _results = [];
   bool _isLoading = false;
-  bool _hasSearched = false; // To show initial message vs. no results message
+  bool _hasSearched = false;
 
   @override
   void initState() {
     super.initState();
-    // Listen for search results coming from the service
     _searchSubscription = widget.chatService.searchResults.listen((results) {
       if (mounted) {
         setState(() {
@@ -32,29 +30,32 @@ class _SearchPanelState extends State<SearchPanel> {
         });
       }
     });
-    // Fetch top files when the panel loads
     widget.chatService.fetchTopFiles();
   }
 
   @override
   void dispose() {
     _searchController.dispose();
-    _searchSubscription?.cancel(); // Clean up the listener
+    _searchSubscription?.cancel();
     super.dispose();
   }
 
   void _performSearch() {
     final query = _searchController.text.trim();
     if (query.isEmpty) return;
-
     setState(() {
       _isLoading = true;
       _hasSearched = true;
-      _results = []; // Clear previous results immediately
+      _results = [];
     });
-
-    // Call the service to execute the search (case-insensitive is handled in the service)
     widget.chatService.searchFiles(query);
+  }
+
+  void _downloadFile(SearchResult item) {
+    widget.chatService.downloadFile(item.fileName, item.size, item.peer);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text("Started download: ${item.fileName}"),
+    ));
   }
 
   Widget _buildBody() {
@@ -70,7 +71,6 @@ class _SearchPanelState extends State<SearchPanel> {
       );
     }
     if (!_hasSearched && _results.isNotEmpty) {
-      // Show top files by default before any search
       return ListView.builder(
         itemCount: _results.length,
         itemBuilder: (context, idx) {
@@ -93,7 +93,7 @@ class _SearchPanelState extends State<SearchPanel> {
               ),
               title: Text(item.fileName, style: const TextStyle(color: roseWhite, fontWeight: FontWeight.bold, fontSize: 16)),
               subtitle: Text(
-                item.formattedSize, // Use the formatted size from the model
+                item.formattedSize,
                 style: TextStyle(color: roseWhite.withOpacity(0.7)),
               ),
               trailing: Column(
@@ -103,9 +103,7 @@ class _SearchPanelState extends State<SearchPanel> {
                   Text("Peer", style: TextStyle(color: roseWhite.withOpacity(0.6), fontSize: 12)),
                 ],
               ),
-              onTap: () {
-                // TODO: Implement download logic
-              },
+              onTap: () => _downloadFile(item),
             ),
           );
         },
@@ -119,8 +117,6 @@ class _SearchPanelState extends State<SearchPanel> {
         ),
       );
     }
-
-    // Display the live results from search
     return ListView.builder(
       itemCount: _results.length,
       itemBuilder: (context, idx) {
@@ -143,7 +139,7 @@ class _SearchPanelState extends State<SearchPanel> {
             ),
             title: Text(item.fileName, style: const TextStyle(color: roseWhite, fontWeight: FontWeight.bold, fontSize: 16)),
             subtitle: Text(
-              item.formattedSize, // Use the formatted size from the model
+              item.formattedSize,
               style: TextStyle(color: roseWhite.withOpacity(0.7)),
             ),
             trailing: Column(
@@ -153,9 +149,7 @@ class _SearchPanelState extends State<SearchPanel> {
                 Text("Peer", style: TextStyle(color: roseWhite.withOpacity(0.6), fontSize: 12)),
               ],
             ),
-            onTap: () {
-              // TODO: Implement download logic
-            },
+            onTap: () => _downloadFile(item),
           ),
         );
       },
@@ -199,7 +193,7 @@ class _SearchPanelState extends State<SearchPanel> {
                     contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
                   ),
                   style: const TextStyle(color: roseWhite, fontSize: 15),
-                  onSubmitted: (_) => _performSearch(), // Wire up submission
+                  onSubmitted: (_) => _performSearch(),
                 ),
               ),
               const SizedBox(width: 16),
@@ -214,7 +208,7 @@ class _SearchPanelState extends State<SearchPanel> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   elevation: 0,
                 ),
-                onPressed: _performSearch, // Wire up button press
+                onPressed: _performSearch,
               ),
             ],
           ),

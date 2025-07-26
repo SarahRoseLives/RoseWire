@@ -42,17 +42,11 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
   @override
   void initState() {
     super.initState();
-    _sshChatService = SshChatService();
-    _sshChatService.connect(
-      nickname: widget.nickname,
-      keyPath: widget.keyPath,
-    );
-
-    _restoreLibraryAndShare();
+    _sshChatService = SshChatService(); // Default host is sarahsforge.dev
 
     _panels = [
       SearchPanel(chatService: _sshChatService),
-      TransfersPanel(),
+      TransfersPanel(chatService: _sshChatService),
       LibraryPanel(
         nickname: widget.nickname,
         onLibraryChanged: _handleLibraryChanged,
@@ -62,9 +56,20 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
         chatService: _sshChatService,
       ),
       NetworkPanel(chatService: _sshChatService),
-      SettingsPanel(),
+      SettingsPanel(chatService: _sshChatService), // <-- Pass service to settings
       AboutPanel(),
     ];
+
+    _initializeConnection();
+  }
+
+  /// Establishes the SSH connection and then shares the initial library.
+  void _initializeConnection() async {
+    await _sshChatService.connect(
+      nickname: widget.nickname,
+      keyPath: widget.keyPath,
+    );
+    await _restoreLibraryAndShare();
   }
 
   Future<void> _restoreLibraryAndShare() async {
@@ -79,9 +84,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
               .list()
               .where((f) => f is File)
               .toList();
-          _libraryFolder = folderPath;
-          _libraryFiles = files.cast<File>();
-          _shareLibraryToServer();
+          _handleLibraryChanged(folderPath, files.cast<File>());
         }
       }
     } catch (e) {
@@ -90,20 +93,27 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
   }
 
   void _handleLibraryChanged(String folderPath, List<File> files) {
-    _libraryFolder = folderPath;
-    _libraryFiles = files;
+    setState(() {
+      _libraryFolder = folderPath;
+      _libraryFiles = files;
+    });
+
+    _sshChatService.setLibraryPath(folderPath); // Ensure service knows path
     _shareLibraryToServer();
   }
 
   void _shareLibraryToServer() {
     if (_libraryFiles.isEmpty) return;
-    final payload = _libraryFiles.map((file) {
-      final name = file.path.split(Platform.pathSeparator).last.replaceAll('|', '_');
+    final filesPayload = _libraryFiles.map((file) {
+      final name = file.path.split(Platform.pathSeparator).last;
       final size = file.lengthSync();
-      return "$name:$size:false";
-    }).join("|");
-    final command = "/share $payload";
-    _sshChatService.sendMessage(command);
+      return {
+        "Name": name,
+        "Size": size,
+        "IsDir": false,
+      };
+    }).toList();
+    _sshChatService.shareFiles(filesPayload);
   }
 
   @override
@@ -143,7 +153,6 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
       selectedIcon: Icon(Icons.settings, color: rosePink),
       label: Text('Settings'),
     ),
-    // About is REMOVED from the NavigationRail
   ];
 
   @override

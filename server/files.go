@@ -1,3 +1,4 @@
+// files.go
 package main
 
 import (
@@ -17,9 +18,9 @@ type SharedFile struct {
 
 // SearchResult includes the peer's nickname along with file info.
 type SearchResult struct {
-	FileName string
-	Size     int64
-	Peer     string
+	FileName string `json:"fileName"`
+	Size     int64  `json:"size"`
+	Peer     string `json:"peer"`
 }
 
 // FileRegistry tracks all files shared by all connected users.
@@ -54,6 +55,25 @@ func (r *FileRegistry) RemoveUser(nickname string) {
 	defer r.mu.Unlock()
 	delete(r.files, nickname)
 	log.Printf("Removed user %s from file registry.", nickname)
+}
+
+// VerifyFileOwner checks if a specific user is sharing a file with a specific name.
+func (r *FileRegistry) VerifyFileOwner(filename, owner string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	userFiles, ok := r.files[owner]
+	if !ok {
+		return false
+	}
+
+	for _, file := range userFiles {
+		if file.Name == filename {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Search finds files matching the query across all online users.
@@ -101,7 +121,6 @@ func (r *FileRegistry) TopFiles(limit int) []SearchResult {
 	}
 
 	sort.Slice(allFiles, func(i, j int) bool {
-		// Sort descending by size
 		return allFiles[i].Size > allFiles[j].Size
 	})
 
@@ -112,13 +131,12 @@ func (r *FileRegistry) TopFiles(limit int) []SearchResult {
 	return allFiles
 }
 
-// ParseShareCommand decodes a command string like "/share file:size:isDir|file2:size2:isDir2"
-// into a slice of SharedFile objects.
+// ParseShareCommand decodes a command string.
 func ParseShareCommand(payload string) ([]SharedFile, error) {
 	var files []SharedFile
 	payload = strings.TrimSpace(payload)
 	if payload == "" {
-		return files, nil // An empty list is a valid update (means they're sharing nothing).
+		return files, nil
 	}
 
 	parts := strings.Split(payload, "|")
@@ -151,4 +169,23 @@ func ParseShareCommand(payload string) ([]SharedFile, error) {
 		})
 	}
 	return files, nil
+}
+
+// FindFile finds a specific file by a specific owner and returns its info.
+func (r *FileRegistry) FindFile(filename, owner string) (SharedFile, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	userFiles, ok := r.files[owner]
+	if !ok {
+		return SharedFile{}, false
+	}
+
+	for _, file := range userFiles {
+		if file.Name == filename {
+			return file, true
+		}
+	}
+
+	return SharedFile{}, false
 }

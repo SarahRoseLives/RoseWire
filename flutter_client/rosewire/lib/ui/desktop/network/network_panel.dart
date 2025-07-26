@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
 import '../rosewire_desktop.dart';
@@ -20,26 +19,20 @@ class _NetworkPanelState extends State<NetworkPanel> {
   @override
   void initState() {
     super.initState();
+    // Listen to all messages from the service
     _statsSub = widget.chatService.messages.listen((msg) {
-      if (msg.startsWith("[STATS] ")) {
-        final payload = msg.substring(8);
-        try {
-          final data = json.decode(payload) as Map<String, dynamic>;
+      // We only care about network_stats messages
+      if (msg['type'] == 'network_stats') {
+        if (mounted) {
           setState(() {
-            _stats = data;
-            _loading = false;
-          });
-        } catch (e) {
-          setState(() {
-            _stats = null;
+            _stats = msg['payload'] as Map<String, dynamic>;
             _loading = false;
           });
         }
       }
     });
-
-    // Request stats
-    widget.chatService.sendMessage("/stats");
+    // Request stats when the panel loads
+    widget.chatService.requestStats();
     setState(() {
       _loading = true;
     });
@@ -57,6 +50,7 @@ class _NetworkPanelState extends State<NetworkPanel> {
     final users = stats?['users'] as List<dynamic>? ?? [];
     final relayServers = stats?['relayServers'] ?? 1;
     final totalUsers = stats?['totalUsers'] ?? users.length;
+    // New fields
     final totalTransfers = stats?['totalTransfers'] ?? 0;
     final activeTransfers = stats?['activeTransfers'] ?? 0;
 
@@ -98,12 +92,14 @@ class _NetworkPanelState extends State<NetworkPanel> {
                     value: "$relayServers",
                     color: rosePurple,
                   ),
+                  // Updated to use new stats field
                   _StatItem(
                     icon: Icons.swap_vertical_circle,
                     label: "Active Transfers",
                     value: "$activeTransfers",
                     color: roseGreen,
                   ),
+                  // Updated to use new stats field
                   _StatItem(
                     icon: Icons.library_music,
                     label: "Total Transfers",

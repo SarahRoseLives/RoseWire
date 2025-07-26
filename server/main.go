@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -20,6 +21,10 @@ const (
 	serverPort  = 2222
 	hostKeyFile = "server_ed25519"
 	nickDBFile  = "nicks.db"
+)
+
+var (
+	statusHTTPListen = "127.0.0.1:8080" // set to "0.0.0.0:8080" for public access
 )
 
 type NickDB struct {
@@ -57,6 +62,8 @@ func (db *NickDB) Save(path string) error {
 	if err != nil {
 		return err
 	}
+	// On unix, ensure the file is private
+	// os.Chmod(tmp, 0600)
 	defer f.Close()
 	for nick, key := range db.NickToKey {
 		fmt.Fprintf(f, "%s %s\n", nick, key)
@@ -78,14 +85,6 @@ func (db *NickDB) Register(nick string, pubkey ssh.PublicKey) error {
 	return nil
 }
 
-func (db *NickDB) Check(nick string, pubkey ssh.PublicKey) bool {
-	db.Lock()
-	defer db.Unlock()
-	keyStr := base64.StdEncoding.EncodeToString(pubkey.Marshal())
-	known, ok := db.NickToKey[nick]
-	return ok && known == keyStr
-}
-
 func ensureHostKey(path string) (ssh.Signer, error) {
 	keyBytes, err := os.ReadFile(path)
 	if err != nil {
@@ -93,10 +92,6 @@ func ensureHostKey(path string) (ssh.Signer, error) {
 		return nil, err
 	}
 	return ssh.ParsePrivateKey(keyBytes)
-}
-
-func parseNickname(conn ssh.ConnMetadata) string {
-	return conn.User()
 }
 
 func main() {
@@ -114,10 +109,18 @@ func main() {
 	fileRegistry := NewFileRegistry()
 	chatHub := NewChatHub(fileRegistry)
 
+	// Start the status web server at web root ("/")
+	statusSvc := NewStatusService(chatHub, statusHTTPListen)
+	go func() {
+		log.Printf("Status web server listening at http://%s/", statusHTTPListen)
+		http.Handle("/", statusSvc)
+		http.Handle("/api/status", statusSvc)
+		http.ListenAndServe(statusHTTPListen, nil)
+	}()
+
 	config := &ssh.ServerConfig{
-		NoClientAuth: false,
 		PublicKeyCallback: func(meta ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
-			nick := parseNickname(meta)
+			nick := meta.User()
 			if nick == "" {
 				return nil, fmt.Errorf("nickname missing")
 			}
@@ -126,7 +129,8 @@ func main() {
 				return nil, err
 			}
 			if err := nickDB.Save(nickDBFile); err != nil {
-				return nil, err
+				// Log the save error but don't fail the login
+				log.Printf("Error saving nick DB: %v", err)
 			}
 			return &ssh.Permissions{
 				Extensions: map[string]string{
@@ -176,7 +180,7 @@ func handleConn(nConn net.Conn, config *ssh.ServerConfig, chatHub *ChatHub) {
 			log.Printf("Could not accept channel: %v", err)
 			continue
 		}
-		go handleSessionChannel(channel, requests, nickname, chatHub)
+		go handleSessionRequests(channel, requests, nickname, chatHub)
 	}
 }
 
@@ -185,65 +189,46 @@ type execPayload struct {
 	Command string
 }
 
-func handleSessionChannel(channel ssh.Channel, requests <-chan *ssh.Request, nickname string, chatHub *ChatHub) {
-	req, ok := <-requests
-	if !ok {
-		return
-	}
-
-	switch req.Type {
-	case "shell":
-		req.Reply(false, nil)
-		io.WriteString(channel, "RoseWire relay shell not implemented.\n")
-		channel.Close()
-
-	// --------------------- FIX START ---------------------
-	// Handle 'exec' requests, which is how dartssh2 sends subsystem requests.
-	case "exec":
-		var payload execPayload
-		if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
-			log.Printf("Warning: malformed exec payload from %s", nickname)
-			req.Reply(false, nil)
+func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, nickname string, chatHub *ChatHub) {
+	// A session can have multiple requests. We only care about the first one
+	// that establishes the subsystem/shell.
+	for req := range requests {
+		isChatSubsystem := false
+		switch req.Type {
+		case "exec":
+			var payload execPayload
+			ssh.Unmarshal(req.Payload, &payload)
+			// dartssh2 sends 'execute("subsystem:chat")' which becomes an exec request
+			if payload.Command == "subsystem:chat" {
+				isChatSubsystem = true
+			}
+		case "subsystem":
+			// Standard SSH clients use this
+			if string(req.Payload[4:]) == "chat" {
+				isChatSubsystem = true
+			}
+		case "shell":
+			// We don't support a shell, but we can reply gracefully
+			req.Reply(true, nil)
+			io.WriteString(channel, "RoseWire shell not implemented. Closing session.\n")
 			channel.Close()
-			return
+			return // End this goroutine
 		}
 
-		if payload.Command == "subsystem:chat" {
-			log.Printf("User '%s' approved for 'chat' via exec request", nickname)
+		if isChatSubsystem {
+			log.Printf("User '%s' approved for 'chat' subsystem (type: %s)", nickname, req.Type)
 			req.Reply(true, nil)
-			chatHub.Join(nickname, channel)
-
-			// Drain remaining requests to keep the session alive.
-			for req := range requests {
-				if req.WantReply {
-					req.Reply(false, nil)
-				}
-			}
-			return // Exit when the client disconnects.
+			// --- THE FIX ---
+			// Get the client instance from Join and wait for it to be done.
+			client := chatHub.Join(nickname, channel)
+			<-client.Done() // This line blocks until the client disconnects.
+			// --- END FIX ---
+			return // Now we can safely return.
 		}
-		// Fallthrough for any other exec command.
 
-	// ---------------------- FIX END ----------------------
-
-	case "subsystem":
-		// This case is kept for compatibility with other clients (e.g., OpenSSH).
-		if string(req.Payload[4:]) == "chat" {
-			log.Printf("User '%s' approved for 'chat' subsystem", nickname)
-			req.Reply(true, nil)
-			chatHub.Join(nickname, channel)
-			for req := range requests {
-				if req.WantReply {
-					req.Reply(false, nil)
-				}
-			}
-			return // Exits when the client disconnects.
+		// If it's not a request we handle, reject it.
+		if req.WantReply {
+			req.Reply(false, nil)
 		}
-		// Fallthrough for unknown subsystems.
-		fallthrough
-
-	default:
-		log.Printf("User '%s' requested unknown request type: %s", nickname, req.Type)
-		req.Reply(false, nil)
-		channel.Close()
 	}
 }

@@ -144,13 +144,12 @@ class _LoginPanelState extends State<LoginPanel> {
     try {
       final privateKey = await File(_selectedKeyPath!).readAsString();
 
-      // FIX 1: Use SSHSocket.connect, which returns the required SSHSocket type.
-      final socket = await SSHSocket.connect('localhost', 2222);
+      // Changed from 'localhost' to 'sarahsforge.dev'
+      final socket = await SSHSocket.connect('sarahsforge.dev', 2222);
 
       client = SSHClient(
         socket,
         username: _selectedNick!,
-        // FIX 2: SSHKeyPair.fromPem already returns a List, so remove the extra brackets.
         identities: SSHKeyPair.fromPem(privateKey),
       );
 

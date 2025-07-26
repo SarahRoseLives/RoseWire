@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart'; // <-- Import the new package
 import '../rosewire_desktop.dart';
 import 'dart:io';
 import 'dart:convert';
@@ -61,8 +62,13 @@ class _LibraryPanelState extends State<LibraryPanel> {
     });
   }
 
+  // UPDATED: This method now uses the file_picker package
   Future<void> _selectFolder() async {
-    String? selectedPath = await _showFolderPicker();
+    // Use the file_picker package to show a native directory chooser.
+    String? selectedPath = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: 'Please select your RoseWire library folder',
+    );
+
     if (selectedPath != null && selectedPath.isNotEmpty) {
       setState(() {
         _downloadsPath = selectedPath;
@@ -118,36 +124,7 @@ class _LibraryPanelState extends State<LibraryPanel> {
     }
   }
 
-  Future<String?> _showFolderPicker() async {
-    // See previous implementation
-    String? result = await showDialog<String>(
-      context: context,
-      builder: (context) {
-        final controller = TextEditingController(text: _downloadsPath ?? "");
-        return AlertDialog(
-          title: Text("Select Downloads Folder"),
-          content: TextField(
-            controller: controller,
-            decoration: InputDecoration(
-              labelText: "Folder Path",
-              hintText: "/home/user/Downloads",
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(null),
-              child: Text("Cancel"),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.of(context).pop(controller.text.trim()),
-              child: Text("Select"),
-            ),
-          ],
-        );
-      },
-    );
-    return result;
-  }
+  // REMOVED: The _showFolderPicker method is no longer needed.
 
   @override
   Widget build(BuildContext context) {
@@ -158,19 +135,22 @@ class _LibraryPanelState extends State<LibraryPanel> {
         children: [
           Row(
             children: [
-              Text(
-                "My Library (${_downloadsPath ?? "Choose Folder"})",
-                style: TextStyle(
-                  fontSize: 18,
-                  color: roseWhite,
-                  fontWeight: FontWeight.w600,
+              Flexible( // Use Flexible to prevent overflow
+                child: Text(
+                  "My Library (${_downloadsPath ?? "Choose Folder"})",
+                  style: TextStyle(
+                    fontSize: 18,
+                    color: roseWhite,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               SizedBox(width: 16),
               ElevatedButton.icon(
                 icon: Icon(Icons.folder_open),
                 label: Text("Select Folder"),
-                onPressed: _selectFolder,
+                onPressed: _selectFolder, // This now opens the GUI chooser
                 style: ElevatedButton.styleFrom(
                   backgroundColor: rosePink,
                   foregroundColor: roseWhite,

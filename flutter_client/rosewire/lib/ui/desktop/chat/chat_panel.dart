@@ -30,28 +30,25 @@ class _ChatPanelState extends State<ChatPanel> {
     _messageSubscription = widget.chatService.messages.listen(_onMessageReceived);
   }
 
-  void _onMessageReceived(String rawMessage) {
-    // A simple regex to parse messages from the server.
-    // Format 1 (user message): [15:04] someuser: Hello world
-    // Format 2 (system message): [15:04] anotheruser joined the chat.
-    final userMsgRegex = RegExp(r'^\[.+\]\s(.+?):\s(.*)$');
-    final systemMsgRegex = RegExp(r'^\[.+\]\s(?!.+:)(.*)$');
-
-    final userMatch = userMsgRegex.firstMatch(rawMessage);
-    final systemMatch = systemMsgRegex.firstMatch(rawMessage);
+  void _onMessageReceived(Map<String, dynamic> message) {
+    final type = message['type'] as String;
+    final payload = message['payload'] as Map<String, dynamic>;
 
     late final _ChatMessage newMessage;
 
-    if (userMatch != null) {
-      final nickname = userMatch.group(1)!;
-      final text = userMatch.group(2)!;
-      newMessage = _ChatMessage(nickname, text, isMe: nickname == widget.nickname);
-    } else if (systemMatch != null) {
-      final text = systemMatch.group(1)!;
-      newMessage = _ChatMessage("System", text, isMe: false, isSystem: true);
-    } else {
-      // Fallback for un-parsable messages
-      newMessage = _ChatMessage("System", rawMessage, isMe: false, isSystem: true);
+    switch (type) {
+      case 'chat_broadcast':
+        final nickname = payload['nickname'] as String;
+        final text = payload['text'] as String;
+        newMessage = _ChatMessage(nickname, text, isMe: nickname == widget.nickname);
+        break;
+      case 'system_broadcast':
+        final text = payload['text'] as String;
+        newMessage = _ChatMessage("System", text, isMe: false, isSystem: true);
+        break;
+      default:
+        // Ignore other message types like network_stats, etc.
+        return;
     }
 
     if (mounted) {
@@ -254,7 +251,7 @@ class _ChatPanelState extends State<ChatPanel> {
   }
 }
 
-// Update the _ChatMessage class to handle system messages
+// Data class is unchanged
 class _ChatMessage {
   final String nickname;
   final String text;
