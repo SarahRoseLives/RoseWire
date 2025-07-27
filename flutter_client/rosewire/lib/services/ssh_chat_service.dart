@@ -48,7 +48,7 @@ class SshChatService {
 	bool _disposed = false;
 
 	// You can increase this again to 5 or more for faster parallel downloads
-	static const int _numStreams = 20;
+	static const int _numStreams = 50;
 	static const int _uploadChunkSize = 32768;
 
 	final _messageController = StreamController<Map<String, dynamic>>.broadcast();
