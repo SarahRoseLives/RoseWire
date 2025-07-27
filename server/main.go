@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -26,6 +27,79 @@ const (
 var (
 	statusHTTPListen = "127.0.0.1:8080" // set to "0.0.0.0:8080" for public access
 )
+
+// DataStreamManager handles pairing data channels for parallel transfers.
+type DataStreamManager struct {
+	mu      sync.Mutex
+	pending map[string]ssh.Channel // Key: "transferID:streamIndex", Value: the first channel that connected
+}
+
+// NewDataStreamManager creates a new manager instance.
+func NewDataStreamManager() *DataStreamManager {
+	return &DataStreamManager{
+		pending: make(map[string]ssh.Channel),
+	}
+}
+
+// pipeStreams bi-directionally copies data between two channels using a deadlock-safe pattern.
+func pipeStreams(c1, c2 ssh.Channel) {
+	var once sync.Once
+	// The close function will be called exactly once by the first goroutine to finish.
+	closeFunc := func() {
+		c1.Close()
+		c2.Close()
+		// Removed RemoteAddr as it's not available on ssh.Channel
+		log.Printf("Finished piping streams.")
+	}
+
+	// Copy from c1 to c2
+	go func() {
+		io.Copy(c1, c2)
+		once.Do(closeFunc)
+	}()
+
+	// Copy from c2 to c1
+	go func() {
+		io.Copy(c2, c1)
+		once.Do(closeFunc)
+	}()
+}
+
+// Pair finds the peer for the given key and pipes them together.
+// If the peer is not found, it stores newChan and waits.
+func (dsm *DataStreamManager) Pair(key string, newChan ssh.Channel) {
+	dsm.mu.Lock()
+	peerChan, ok := dsm.pending[key]
+	if ok {
+		// Peer was waiting. Pair them and remove from map.
+		delete(dsm.pending, key)
+		dsm.mu.Unlock()
+
+		log.Printf("Pairing streams for key %s", key)
+		go pipeStreams(newChan, peerChan)
+		return
+	}
+
+	// We are the first. Add to map and wait for peer.
+	dsm.pending[key] = newChan
+	dsm.mu.Unlock()
+	log.Printf("Stream for key %s is pending a peer", key)
+
+	// Add a timeout to prevent dangling channels.
+	// The newChan.Context() method does not exist, so we rely only on the timer.
+	// If a client disconnects, this entry will leak for 30 seconds before being cleaned up.
+	go func() {
+		<-time.After(30 * time.Second) // 30 second timeout to connect
+		dsm.mu.Lock()
+		// Check if we are still pending after the timeout
+		if ch, stillPending := dsm.pending[key]; stillPending && ch == newChan {
+			log.Printf("Timed out waiting for peer for key %s. Closing channel.", key)
+			delete(dsm.pending, key)
+			newChan.Close()
+		}
+		dsm.mu.Unlock()
+	}()
+}
 
 type NickDB struct {
 	sync.Mutex
@@ -62,8 +136,6 @@ func (db *NickDB) Save(path string) error {
 	if err != nil {
 		return err
 	}
-	// On unix, ensure the file is private
-	// os.Chmod(tmp, 0600)
 	defer f.Close()
 	for nick, key := range db.NickToKey {
 		fmt.Fprintf(f, "%s %s\n", nick, key)
@@ -108,8 +180,8 @@ func main() {
 
 	fileRegistry := NewFileRegistry()
 	chatHub := NewChatHub(fileRegistry)
+	dataManager := NewDataStreamManager()
 
-	// Start the status web server at web root ("/")
 	statusSvc := NewStatusService(chatHub, statusHTTPListen)
 	go func() {
 		log.Printf("Status web server listening at http://%s/", statusHTTPListen)
@@ -129,7 +201,6 @@ func main() {
 				return nil, err
 			}
 			if err := nickDB.Save(nickDBFile); err != nil {
-				// Log the save error but don't fail the login
 				log.Printf("Error saving nick DB: %v", err)
 			}
 			return &ssh.Permissions{
@@ -153,11 +224,11 @@ func main() {
 			log.Printf("Failed to accept: %v", err)
 			continue
 		}
-		go handleConn(nConn, config, chatHub)
+		go handleConn(nConn, config, chatHub, dataManager)
 	}
 }
 
-func handleConn(nConn net.Conn, config *ssh.ServerConfig, chatHub *ChatHub) {
+func handleConn(nConn net.Conn, config *ssh.ServerConfig, chatHub *ChatHub, dataManager *DataStreamManager) {
 	defer nConn.Close()
 	sshConn, chans, reqs, err := ssh.NewServerConn(nConn, config)
 	if err != nil {
@@ -180,53 +251,67 @@ func handleConn(nConn net.Conn, config *ssh.ServerConfig, chatHub *ChatHub) {
 			log.Printf("Could not accept channel: %v", err)
 			continue
 		}
-		go handleSessionRequests(channel, requests, nickname, chatHub)
+		go handleSessionRequests(channel, requests, nickname, chatHub, dataManager)
 	}
 }
 
-// Helper struct for parsing "exec" request payloads.
 type execPayload struct {
 	Command string
 }
 
-func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, nickname string, chatHub *ChatHub) {
-	// A session can have multiple requests. We only care about the first one
-	// that establishes the subsystem/shell.
+func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, nickname string, chatHub *ChatHub, dataManager *DataStreamManager) {
 	for req := range requests {
 		isChatSubsystem := false
+		isDataSubsystem := false
+		var dataKey string
+
 		switch req.Type {
 		case "exec":
 			var payload execPayload
 			ssh.Unmarshal(req.Payload, &payload)
-			// dartssh2 sends 'execute("subsystem:chat")' which becomes an exec request
 			if payload.Command == "subsystem:chat" {
 				isChatSubsystem = true
+			} else if strings.HasPrefix(payload.Command, "subsystem:data-transfer:") {
+				subsystem := strings.TrimPrefix(payload.Command, "subsystem:")
+				parts := strings.Split(subsystem, ":")
+				if len(parts) == 3 && parts[0] == "data-transfer" {
+					isDataSubsystem = true
+					dataKey = fmt.Sprintf("%s:%s", parts[1], parts[2]) // transferID:streamIndex
+				}
 			}
 		case "subsystem":
-			// Standard SSH clients use this
-			if string(req.Payload[4:]) == "chat" {
+			subsystem := string(req.Payload[4:])
+			if subsystem == "chat" {
 				isChatSubsystem = true
+			} else if strings.HasPrefix(subsystem, "data-transfer:") {
+				parts := strings.Split(subsystem, ":")
+				if len(parts) == 3 && parts[0] == "data-transfer" {
+					isDataSubsystem = true
+					dataKey = fmt.Sprintf("%s:%s", parts[1], parts[2]) // transferID:streamIndex
+				}
 			}
 		case "shell":
-			// We don't support a shell, but we can reply gracefully
 			req.Reply(true, nil)
 			io.WriteString(channel, "RoseWire shell not implemented. Closing session.\n")
 			channel.Close()
-			return // End this goroutine
+			return
 		}
 
 		if isChatSubsystem {
 			log.Printf("User '%s' approved for 'chat' subsystem (type: %s)", nickname, req.Type)
 			req.Reply(true, nil)
-			// --- THE FIX ---
-			// Get the client instance from Join and wait for it to be done.
 			client := chatHub.Join(nickname, channel)
-			<-client.Done() // This line blocks until the client disconnects.
-			// --- END FIX ---
-			return // Now we can safely return.
+			<-client.Done()
+			return
 		}
 
-		// If it's not a request we handle, reject it.
+		if isDataSubsystem {
+			log.Printf("User '%s' approved for data subsystem on key '%s'", nickname, dataKey)
+			req.Reply(true, nil)
+			dataManager.Pair(dataKey, channel)
+			return
+		}
+
 		if req.WantReply {
 			req.Reply(false, nil)
 		}
