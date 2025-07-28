@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../../../services/ssh_file_service.dart';
 import '../../../services/ssh_chat_service.dart';
 import '../rosewire_desktop.dart';
 
