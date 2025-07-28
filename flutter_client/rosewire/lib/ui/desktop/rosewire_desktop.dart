@@ -209,7 +209,12 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
                               nickname: widget.nickname,
                               onAboutTap: () => setState(() => _selectedPanelIndex = 6),
                             ),
-                            Expanded(child: _panels[_selectedPanelIndex]),
+                            Expanded(
+                              child: IndexedStack(
+                                index: _selectedPanelIndex,
+                                children: _panels,
+                              ),
+                            ),
                             _RoseWireStatusBar(nickname: widget.nickname),
                           ],
                         ),
