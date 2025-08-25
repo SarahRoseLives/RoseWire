@@ -14,37 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/mux"
 	"golang.org/x/crypto/ssh"
 )
 
-// ... (Constants and structs are unchanged) ...
-
-func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *ChatHub) {
-	statusSvc := NewStatusService(chatHub, listenAddr)
-	webfingerHandler := &WebFingerHandler{Cfg: cfg, NickDB: nickDB}
-	s2sHandler := NewS2SHandler(cfg, chatHub)
-
-	mux := http.NewServeMux()
-
-	mux.Handle("/", statusSvc)
-	mux.Handle("/api/status", statusSvc)
-	mux.Handle("/.well-known/webfinger", webfingerHandler)
-
-	s2sRouter := http.NewServeMux()
-	s2sRouter.HandleFunc("/api/s2s/inbox", s2sHandler.Inbox)
-	s2sRouter.HandleFunc("/api/s2s/search", s2sHandler.Search)
-	// FIX: Register the new S2S transfer handler.
-	s2sRouter.HandleFunc("/api/s2s/transfers", s2sHandler.InitiateTransfer)
-	mux.Handle("/api/s2s/", s2sHandler.authMiddleware(s2sRouter))
-
-	log.Printf("HTTP services (Status, WebFinger, S2S) listening at http://%s/", listenAddr)
-	if err := http.ListenAndServe(listenAddr, mux); err != nil {
-		log.Fatalf("Failed to start HTTP server: %v", err)
-	}
-}
-
-// ... (The rest of main.go is unchanged) ...
-// (Full file content omitted for brevity as the only change is the one line above)
 const (
 	hostKeyFile           = "server_ed25519"
 	nickDBFile            = "nicks.db"
@@ -52,6 +25,7 @@ const (
 	defaultSshListenAddr  = "0.0.0.0:2222"
 	defaultHttpListenAddr = "0.0.0.0:8080"
 )
+
 type DataStreamManager struct {
 	mu      sync.Mutex
 	pending map[string]ssh.Channel
@@ -103,10 +77,23 @@ func (dsm *DataStreamManager) Pair(key string, newChan ssh.Channel) {
 		dsm.mu.Unlock()
 	}()
 }
+
+// GetAndRemovePending retrieves a waiting channel for a given key, removing it from the map.
+func (dsm *DataStreamManager) GetAndRemovePending(key string) (ssh.Channel, bool) {
+	dsm.mu.Lock()
+	defer dsm.mu.Unlock()
+	ch, ok := dsm.pending[key]
+	if ok {
+		delete(dsm.pending, key)
+	}
+	return ch, ok
+}
+
 type NickDB struct {
 	sync.Mutex
 	NickToKey map[string]string
 }
+
 func LoadNickDB(path string) (*NickDB, error) {
 	db := &NickDB{NickToKey: make(map[string]string)}
 	file, err := os.Open(path)
@@ -161,6 +148,35 @@ func ensureHostKey(path string) (ssh.Signer, error) {
 	}
 	return ssh.ParsePrivateKey(keyBytes)
 }
+
+func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *ChatHub, dataManager *DataStreamManager) {
+	statusSvc := NewStatusService(chatHub, listenAddr)
+	webfingerHandler := &WebFingerHandler{Cfg: cfg, NickDB: nickDB}
+	s2sHandler := NewS2SHandler(cfg, chatHub, dataManager)
+
+	// Main router
+	router := mux.NewRouter()
+
+	// Public routes
+	router.Handle("/", statusSvc)
+	router.Handle("/api/status", statusSvc)
+	router.Handle("/.well-known/webfinger", webfingerHandler)
+
+	// S2S subrouter with authentication middleware
+	s2sRouter := router.PathPrefix("/api/s2s").Subrouter()
+	s2sRouter.Use(s2sHandler.authMiddleware)
+
+	s2sRouter.HandleFunc("/inbox", s2sHandler.Inbox).Methods("POST")
+	s2sRouter.HandleFunc("/search", s2sHandler.Search).Methods("GET")
+	s2sRouter.HandleFunc("/transfers", s2sHandler.InitiateTransfer).Methods("POST")
+	s2sRouter.HandleFunc("/data/{tid}/{idx}", s2sHandler.RelayData).Methods("POST")
+
+	log.Printf("HTTP services (Status, WebFinger, S2S) listening at http://%s/", listenAddr)
+	if err := http.ListenAndServe(listenAddr, router); err != nil {
+		log.Fatalf("Failed to start HTTP server: %v", err)
+	}
+}
+
 func main() {
 	fmt.Printf("Starting RoseWire server...\n")
 
@@ -189,7 +205,7 @@ func main() {
 	if httpAddr == "" {
 		httpAddr = defaultHttpListenAddr
 	}
-	go startHttpServer(httpAddr, cfg, nickDB, chatHub)
+	go startHttpServer(httpAddr, cfg, nickDB, chatHub, dataManager)
 
 	sshAddr := cfg.SshListenAddr
 	if sshAddr == "" {
@@ -231,10 +247,10 @@ func main() {
 			log.Printf("Failed to accept connection: %v", err)
 			continue
 		}
-		go handleConn(nConn, sshConfig, chatHub, dataManager)
+		go handleConn(nConn, sshConfig, chatHub, dataManager, s2sClient)
 	}
 }
-func handleConn(nConn net.Conn, config *ssh.ServerConfig, chatHub *ChatHub, dataManager *DataStreamManager) {
+func handleConn(nConn net.Conn, config *ssh.ServerConfig, chatHub *ChatHub, dataManager *DataStreamManager, s2sClient *S2SClient) {
 	defer nConn.Close()
 	sshConn, chans, reqs, err := ssh.NewServerConn(nConn, config)
 	if err != nil {
@@ -257,48 +273,40 @@ func handleConn(nConn net.Conn, config *ssh.ServerConfig, chatHub *ChatHub, data
 			log.Printf("Could not accept channel: %v", err)
 			continue
 		}
-		go handleSessionRequests(channel, requests, nickname, chatHub, dataManager)
+		go handleSessionRequests(channel, requests, nickname, chatHub, dataManager, s2sClient)
 	}
 }
+
 type execPayload struct {
 	Command string
 }
-func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, nickname string, chatHub *ChatHub, dataManager *DataStreamManager) {
+
+func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, nickname string, chatHub *ChatHub, dataManager *DataStreamManager, s2sClient *S2SClient) {
 	for req := range requests {
 		isChatSubsystem := false
 		isDataSubsystem := false
-		var dataKey string
+		var transferID, streamIndex string
 
+		var subsystem string
 		switch req.Type {
 		case "exec":
 			var payload execPayload
 			ssh.Unmarshal(req.Payload, &payload)
-			if payload.Command == "subsystem:chat" {
-				isChatSubsystem = true
-			} else if strings.HasPrefix(payload.Command, "subsystem:data-transfer:") {
-				subsystem := strings.TrimPrefix(payload.Command, "subsystem:")
-				parts := strings.Split(subsystem, ":")
-				if len(parts) == 3 && parts[0] == "data-transfer" {
-					isDataSubsystem = true
-					dataKey = fmt.Sprintf("%s:%s", parts[1], parts[2])
-				}
-			}
+			subsystem = payload.Command
 		case "subsystem":
-			subsystem := string(req.Payload[4:])
-			if subsystem == "chat" {
-				isChatSubsystem = true
-			} else if strings.HasPrefix(subsystem, "data-transfer:") {
-				parts := strings.Split(subsystem, ":")
-				if len(parts) == 3 && parts[0] == "data-transfer" {
-					isDataSubsystem = true
-					dataKey = fmt.Sprintf("%s:%s", parts[1], parts[2])
-				}
+			subsystem = string(req.Payload[4:])
+		}
+
+		if subsystem == "chat" || subsystem == "subsystem:chat" {
+			isChatSubsystem = true
+		} else if strings.HasPrefix(subsystem, "data-transfer:") || strings.HasPrefix(subsystem, "subsystem:data-transfer:") {
+			trimmed := strings.TrimPrefix(subsystem, "subsystem:")
+			parts := strings.Split(trimmed, ":")
+			if len(parts) == 3 && parts[0] == "data-transfer" {
+				isDataSubsystem = true
+				transferID = parts[1]
+				streamIndex = parts[2]
 			}
-		case "shell":
-			req.Reply(true, nil)
-			io.WriteString(channel, "RoseWire shell not implemented. Closing session.\n")
-			channel.Close()
-			return
 		}
 
 		if isChatSubsystem {
@@ -310,9 +318,38 @@ func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, ni
 		}
 
 		if isDataSubsystem {
-			log.Printf("User '%s' approved for data subsystem on key '%s'", nickname, dataKey)
+			log.Printf("User '%s' connected for data subsystem on %s:%s", nickname, transferID, streamIndex)
 			req.Reply(true, nil)
-			dataManager.Pair(dataKey, channel)
+			streamKey := fmt.Sprintf("%s:%s", transferID, streamIndex)
+
+			// Check if this is an upload for a federated transfer
+			if val, ok := chatHub.federatedTransfers.Load(transferID); ok {
+				state := val.(*federatedTransferState)
+
+				// --- START FIX ---
+				// Find the full peer address (host:port) from the config for the target domain.
+				targetPeerAddress := state.targetDomain // Default
+				for _, p := range chatHub.config.Peers {
+					if strings.HasPrefix(p, state.targetDomain) {
+						targetPeerAddress = p
+						break
+					}
+				}
+				// --- END FIX ---
+
+				log.Printf("Forwarding federated upload stream %s to %s", streamKey, targetPeerAddress)
+				go func() {
+					// Use the full address with the port
+					err := s2sClient.RelayStream(targetPeerAddress, transferID, streamIndex, channel)
+					if err != nil {
+						log.Printf("Error relaying stream %s: %v", streamKey, err)
+					}
+					channel.Close()
+				}()
+			} else {
+				// Otherwise, it's a local transfer, pair it up.
+				dataManager.Pair(streamKey, channel)
+			}
 			return
 		}
 

@@ -101,10 +101,11 @@ type ShareActivityObject struct {
 	Files []SharedFile `json:"files"`
 }
 
-// NEW: Add a payload for one server to request a file from another.
+// S2STransferRequest now includes the domain of the server requesting the file.
 type S2STransferRequest struct {
-	TransferID    string `json:"transferID"`
-	FileName      string `json:"fileName"`
-	FileOwner     string `json:"fileOwner"`     // The full federated name of the user who has the file
-	RequesterPeer string `json:"requesterPeer"` // The full federated name of the user who wants the file
+	TransferID          string `json:"transferID"`
+	FileName            string `json:"fileName"`
+	FileOwner           string `json:"fileOwner"`           // The full federated name of the user who has the file
+	RequesterPeer       string `json:"requesterPeer"`       // The full federated name of the user who wants the file
+	RequesterPeerDomain string `json:"requesterPeerDomain"` // The domain of the server making the request (e.g., "instance-a.com")
 }

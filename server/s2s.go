@@ -2,27 +2,35 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/gorilla/mux"
+	"golang.org/x/crypto/ssh"
 )
 
 // S2SHandler holds dependencies for handling S2S requests.
 type S2SHandler struct {
-	Cfg *Config
-	Hub *ChatHub
+	Cfg         *Config
+	Hub         *ChatHub
+	DataManager *DataStreamManager
 }
 
-func NewS2SHandler(cfg *Config, hub *ChatHub) *S2SHandler {
+func NewS2SHandler(cfg *Config, hub *ChatHub, dataManager *DataStreamManager) *S2SHandler {
 	return &S2SHandler{
-		Cfg: cfg,
-		Hub: hub,
+		Cfg:         cfg,
+		Hub:         hub,
+		DataManager: dataManager,
 	}
 }
 
 func (h *S2SHandler) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// GET requests (like search) don't need auth
 		if r.Method == "GET" {
 			next.ServeHTTP(w, r)
 			return
@@ -66,7 +74,6 @@ func (h *S2SHandler) Inbox(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// NEW: Add a handler to initiate a federated transfer.
 func (h *S2SHandler) InitiateTransfer(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -78,10 +85,14 @@ func (h *S2SHandler) InitiateTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("S2S Transfer: Received request for %s from %s", req.FileName, req.RequesterPeer)
+	log.Printf("S2S Transfer: Received request for %s from %s. Will forward to %s", req.FileName, req.RequesterPeer, req.RequesterPeerDomain)
 
-	// This server now tells its local client (the file owner) to start the upload process.
-	// The unicast will succeed if the user is currently online.
+	// Store the domain we need to forward the data back to.
+	h.Hub.federatedTransfers.Store(req.TransferID, &federatedTransferState{
+		targetDomain: req.RequesterPeerDomain,
+	})
+
+	// Tell our local client (the file owner) to start the upload process.
 	ok := h.Hub.unicast("upload_request", UploadRequestPayload{
 		TransferID: req.TransferID,
 		FileName:   req.FileName,
@@ -89,12 +100,59 @@ func (h *S2SHandler) InitiateTransfer(w http.ResponseWriter, r *http.Request) {
 
 	if !ok {
 		log.Printf("S2S Transfer: Could not find or message local user %s to start upload.", req.FileOwner)
+		h.Hub.federatedTransfers.Delete(req.TransferID) // Clean up
 		http.Error(w, "File owner is not online on this server.", http.StatusNotFound)
 		return
 	}
 
 	log.Printf("S2S Transfer: Sent 'upload_request' to local user %s.", req.FileOwner)
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// RelayData receives a proxied data stream from another server and pipes it to a local client.
+func (h *S2SHandler) RelayData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	vars := mux.Vars(r)
+	transferID := vars["tid"]
+	streamIndex := vars["idx"]
+	streamKey := fmt.Sprintf("%s:%s", transferID, streamIndex)
+
+	log.Printf("S2S Relay: Receiving data for stream %s", streamKey)
+
+	var channel ssh.Channel
+	var ok bool
+
+	// --- START FIX ---
+	// Wait for up to 10 seconds for the client's SSH channel to appear.
+	for i := 0; i < 100; i++ { // 100 * 100ms = 10 seconds
+		channel, ok = h.DataManager.GetAndRemovePending(streamKey)
+		if ok {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// --- END FIX ---
+
+	if !ok {
+		log.Printf("S2S Relay Error: Timed out waiting for pending client channel for stream %s", streamKey)
+		http.Error(w, "No pending stream for this transfer ID", http.StatusNotFound)
+		return
+	}
+	defer channel.Close()
+	defer r.Body.Close()
+
+	// Pipe the incoming HTTP request body directly into the SSH channel.
+	bytesCopied, err := io.Copy(channel, r.Body)
+	if err != nil {
+		log.Printf("S2S Relay Error: Failed during copy for stream %s: %v", streamKey, err)
+		// Can't send HTTP error as headers are likely already sent.
+		return
+	}
+	log.Printf("S2S Relay: Finished for stream %s, copied %d bytes.", streamKey, bytesCopied)
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *S2SHandler) Search(w http.ResponseWriter, r *http.Request) {

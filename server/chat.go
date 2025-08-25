@@ -22,14 +22,20 @@ type TransferInfo struct {
 	ToUser   string
 }
 
+// federatedTransferState stores the target domain for an upload that needs to be forwarded.
+type federatedTransferState struct {
+	targetDomain string
+}
+
 type ChatHub struct {
-	mu             sync.Mutex
-	clients        map[string]*ChatClient
-	fileRegistry   *FileRegistry
-	transfers      map[string]*TransferInfo
-	totalTransfers int
-	config         *Config
-	s2sClient      *S2SClient
+	mu                 sync.Mutex
+	clients            map[string]*ChatClient
+	fileRegistry       *FileRegistry
+	transfers          map[string]*TransferInfo
+	federatedTransfers sync.Map // transferID -> *federatedTransferState
+	totalTransfers     int
+	config             *Config
+	s2sClient          *S2SClient
 }
 
 type ChatClient struct {
@@ -139,6 +145,10 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 			users = append(users, map[string]string{"nickname": name, "status": "Online"})
 		}
 		activeTransfers := len(c.hub.transfers)
+		c.hub.federatedTransfers.Range(func(key, value interface{}) bool {
+			activeTransfers++
+			return true
+		})
 		totalTransfers := c.hub.totalTransfers
 		c.hub.mu.Unlock()
 		stats := NetworkStatsPayload{
@@ -176,32 +186,34 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 			go c.hub.federateActivity(activity)
 		}
 
-	case "upload_data":
-		var p UploadDataPayload
-		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			log.Printf("handleMessage: got 'upload_data' from '%s' for transfer %s", c.federatedName, p.TransferID)
-			c.relayTransferMessage("upload_data", p, p.TransferID)
-		}
-
 	case "upload_done":
 		var p UploadDonePayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
 			log.Printf("handleMessage: got 'upload_done' from '%s' for transfer %s", c.federatedName, p.TransferID)
-			c.relayTransferMessage("upload_done", p, p.TransferID)
-			c.hub.mu.Lock()
-			delete(c.hub.transfers, p.TransferID)
-			c.hub.totalTransfers++
-			c.hub.mu.Unlock()
+			// For local transfers, relay the message. Federated transfers are handled stream-by-stream.
+			if _, isFederated := c.hub.federatedTransfers.Load(p.TransferID); !isFederated {
+				c.relayTransferMessage("upload_done", p, p.TransferID)
+				c.hub.mu.Lock()
+				delete(c.hub.transfers, p.TransferID)
+				c.hub.totalTransfers++
+				c.hub.mu.Unlock()
+			}
 		}
 
 	case "upload_error":
 		var p UploadErrorPayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
 			log.Printf("handleMessage: got 'upload_error' from '%s' for transfer %s: %s", c.federatedName, p.TransferID, p.Message)
-			c.relayTransferMessage("transfer_error", TransferErrorPayload(p), p.TransferID)
-			c.hub.mu.Lock()
-			delete(c.hub.transfers, p.TransferID)
-			c.hub.mu.Unlock()
+			// For federated transfers, the error needs to be pushed to the other server
+			if _, isFederated := c.hub.federatedTransfers.Load(p.TransferID); isFederated {
+				// TODO: Federate transfer errors back to the requesting server.
+				c.hub.federatedTransfers.Delete(p.TransferID)
+			} else {
+				c.relayTransferMessage("transfer_error", TransferErrorPayload(p), p.TransferID)
+				c.hub.mu.Lock()
+				delete(c.hub.transfers, p.TransferID)
+				c.hub.mu.Unlock()
+			}
 		}
 
 	default:
@@ -218,57 +230,68 @@ func domainFromFederatedName(name string) (string, bool) {
 	return "", false
 }
 
-// FIX: This entire method was missing and has now been restored.
 func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 	if peer == c.federatedName {
 		c.send("transfer_error", TransferErrorPayload{Message: "You cannot download your own file."})
 		return
 	}
 
-	fileInfo, found := c.fileRegistry.FindFile(filename, peer)
+	fileInfo, found := c.hub.fileRegistry.FindFile(filename, peer)
 	if !found {
 		c.send("transfer_error", TransferErrorPayload{Message: fmt.Sprintf("File not found or peer '%s' does not own it.", peer)})
 		return
 	}
 
 	isRemote := !strings.HasSuffix(peer, "@"+c.hub.config.Domain)
+	transferID, err := generateTransferID()
+	if err != nil {
+		log.Printf("Failed to generate transfer ID: %v", err)
+		c.send("transfer_error", TransferErrorPayload{Message: "Server error creating transfer."})
+		return
+	}
+
+	// 1. Tell the local client the transfer is starting, regardless of local or federated.
+	c.send("transfer_start", TransferStartPayload{
+		TransferID: transferID,
+		FileName:   filename,
+		Size:       fileInfo.Size,
+		FromUser:   peer,
+	})
 
 	if isRemote {
 		// --- FEDERATED TRANSFER ---
 		peerDomain, ok := domainFromFederatedName(peer)
 		if !ok {
-			c.send("transfer_error", TransferErrorPayload{Message: "Invalid peer address format."})
+			c.send("transfer_error", TransferErrorPayload{TransferID: transferID, Message: "Invalid peer address format."})
 			return
 		}
 
-		transferID, err := generateTransferID()
-		if err != nil {
-			log.Printf("Failed to generate transfer ID: %v", err)
-			c.send("transfer_error", TransferErrorPayload{Message: "Server error creating transfer."})
-			return
+		// --- START FIX ---
+		// Find the full peer address (host:port) from the config that matches the domain.
+		fullPeerAddress := peerDomain // Default to just the domain in case it's not in the peer list for some reason
+		for _, p := range c.hub.config.Peers {
+			if strings.HasPrefix(p, peerDomain) {
+				fullPeerAddress = p
+				break
+			}
 		}
+		// --- END FIX ---
 
-		// 1. Tell the local client the transfer is starting.
-		c.send("transfer_start", TransferStartPayload{
-			TransferID: transferID,
-			FileName:   filename,
-			Size:       fileInfo.Size,
-			FromUser:   peer,
-		})
-		log.Printf("Federated Transfer %s: Notified local client %s to start download.", transferID, c.federatedName)
+		log.Printf("Federated Transfer %s: %s requesting '%s' from %s", transferID, c.federatedName, filename, peer)
 
 		// 2. Make an S2S request to the peer's server to start the upload.
 		go func() {
 			s2sReq := S2STransferRequest{
-				TransferID:    transferID,
-				FileName:      filename,
-				FileOwner:     peer,
-				RequesterPeer: c.federatedName,
+				TransferID:          transferID,
+				FileName:            filename,
+				FileOwner:           peer,
+				RequesterPeer:       c.federatedName,
+				RequesterPeerDomain: c.hub.config.Domain,
 			}
-			err := c.hub.s2sClient.RequestTransfer(peerDomain, s2sReq)
+			// Use the fullPeerAddress which includes the port.
+			err := c.hub.s2sClient.RequestTransfer(fullPeerAddress, s2sReq)
 			if err != nil {
-				log.Printf("Federated Transfer %s: S2S request to %s failed: %v", transferID, peerDomain, err)
-				// Inform the client that the federated request failed.
+				log.Printf("Federated Transfer %s: S2S request to %s failed: %v", transferID, fullPeerAddress, err)
 				c.send("transfer_error", TransferErrorPayload{
 					TransferID: transferID,
 					Message:    fmt.Sprintf("Peer server %s rejected the transfer.", peerDomain),
@@ -278,12 +301,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 
 	} else {
 		// --- LOCAL TRANSFER (Existing logic) ---
-		transferID, err := generateTransferID()
-		if err != nil {
-			log.Printf("Failed to generate transfer ID: %v", err)
-			c.send("transfer_error", TransferErrorPayload{Message: "Server error creating transfer."})
-			return
-		}
 		transfer := &TransferInfo{
 			ID:       transferID,
 			FileName: filename,
@@ -297,12 +314,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 
 		log.Printf("Local Transfer %s initiated: %s wants '%s' from %s", transferID, c.federatedName, filename, peer)
 
-		c.send("transfer_start", TransferStartPayload{
-			TransferID: transferID,
-			FileName:   filename,
-			Size:       fileInfo.Size,
-			FromUser:   peer,
-		})
 		c.hub.unicast("upload_request", UploadRequestPayload{
 			TransferID: transferID,
 			FileName:   filename,
@@ -310,7 +321,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 	}
 }
 
-// --- The rest of chat.go remains unchanged ---
 func generateTransferID() (string, error) {
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
