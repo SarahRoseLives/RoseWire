@@ -1,158 +1,102 @@
-# RoseWire
+# 🌹 RoseWire
 
-**Modern Peer-to-Peer Music/Media Sharing and Chat, Powered by SSH**
+**A modern, decentralized, and privacy-preserving chat and file-sharing network.**
 
-RoseWire is a modern reimagining of classic P2P music sharing applications, designed for the future but inspired by the past. It enables users to connect, chat, and share music or media files across a decentralized network, all secured and authenticated via SSH. The project includes a cross-platform Flutter desktop client and a Go-based SSH relay server.
-
----
-
-## Features
-
-- **Decentralized file sharing:** Users share their local music/media library with the network.
-- **Global chat:** Real-time network-wide chat among authenticated users.
-- **Search across the network:** Quickly find files available from all connected peers.
-- **Fast, secure transfers:** All communication and file transfers use the SSH protocol.
-- **Modern UI:** Beautiful Material3 desktop interface with themed panels for chat, search, transfers, and more.
-- **User authentication:** Each user is identified by an SSH public key and a unique nickname.
-- **Network health dashboard:** Built-in web server for real-time status and statistics.
+RoseWire is a federated communication platform built on the principle that your data and identity should be your own. It combines the security of SSH with a modern, decentralized architecture, allowing anyone to host their own server instance while participating in a global network.
 
 ---
 
-## Architecture
+## ✨ Features
 
-### 1. **Client (Flutter Desktop App)**
-- Written in Dart/Flutter.
-- Manages SSH connections and user authentication (via locally generated SSH key pairs).
-- Allows users to:
-  - Log in with or create new SSH profiles.
-  - Select a local folder to share as their library.
-  - Broadcast their shared file list to the network.
-  - Search and download files from other users.
-  - Participate in global chat.
-  - Monitor transfers, network stats, and more.
+- **Federated Chat**  
+  Engage in a global chat with users from any instance on the network. Your identity (`@nickname@instance.domain`) is portable and unique.
 
-### 2. **Server (Go SSH Relay)**
-- Written in Go using `golang.org/x/crypto/ssh`.
-- Handles multiple concurrent SSH clients.
-- Maintains file registry, user registry, and active transfer states.
-- Relays chat messages, search requests, and file transfer commands.
-- Offers a status web interface for network and usage statistics.
+- **Decentralized File Sharing**  
+  Share files from your library with the entire network. Search and download files shared by any user on any connected server.
+
+- **Privacy-Preserving Transfers**  
+  All cross-instance file transfers are proxied through the users' home servers. Your personal IP address is never exposed to another instance or its users during a download.
+
+- **Automatic Peer Discovery**  
+  Powered by a gossip protocol, new server instances can automatically discover and connect to the network using just one initial bootstrap peer. This creates a resilient, self-organizing mesh.
+
+- **Secure Client-Server Communication**  
+  All communication between your client and your home server is encrypted end-to-end over a standard SSH connection.
 
 ---
 
-## Quick Start
+## 🌐 How Federation Works in RoseWire
 
-### Prerequisites
+RoseWire's architecture is federated—a network of independent servers that talk to each other. Users connect to a home instance, and that instance communicates with its peers on their behalf. This ensures both decentralization and privacy.
 
-- Go 1.18+ (for the server)
-- Flutter 3.10+ (for the desktop client)
-- (Optional) OpenSSH for generating `server_ed25519` host key
+The federation is built on four key components:
 
-### 1. **Run the SSH Relay Server**
+1. **Global Identity (`@user@domain`)**  
+   A user's identity is a global address tied to their home instance, allowing anyone on any server to uniquely identify and interact with them.
 
-```sh
-# Generate SSH server key (if not present)
-ssh-keygen -t ed25519 -f server_ed25519
+2. **WebFinger for Discovery**  
+   When one server needs to verify a user from another instance, it uses the standard WebFinger protocol. This makes a public HTTPS request to the user's home instance to retrieve their public key and profile info—confirming identity without a central directory.
 
-# Build & run (from project root)
-go run main.go chat.go files.go protocol.go status.go
+3. **ActivityPub-Inspired S2S API**  
+   Server-to-server communication is modeled after the ActivityPub protocol. When a user acts (sending a chat or sharing a file), their server wraps it in a JSON "Activity" and pushes it to the inboxes of all known peer servers. This push-based model proactively distributes information across the network.
+
+4. **Gossip Protocol for Peer Discovery**  
+   No central list of servers needed! Instances use a gossip protocol to find each other. Periodically, a server asks a random peer for its list of known peers, then adds any new ones. This info spreads organically, letting the network grow and heal automatically.
+
+---
+
+## 🔒 Security & Privacy by Design
+
+RoseWire is architected to protect user privacy, especially against IP address disclosure during file transfers.
+
+### 🛡️ The Trusted Proxy Model
+
+Direct client-to-client connections are strictly forbidden.
+
+**The data flow for file sharing:**
 ```
-
-The server will listen on port `2222` for SSH connections and on `127.0.0.1:8080` for the status dashboard.
-
-### 2. **Run the Flutter Desktop Client**
-
-```sh
-# (In a separate terminal, from project root)
-cd <flutter_project_dir>
-flutter pub get
-flutter run -d windows|macos|linux
+Uploader → Instance B → Instance A → Downloader
 ```
+- The downloader's client requests a file from their own server (Instance A).
+- Instance A makes a server-to-server request to Instance B.
+- Instance B requests the file from the uploader's client.
+- The file is streamed: uploader → instance B → instance A → downloader.
 
-- On first run, you'll be prompted to create a nickname and generate an SSH key.
-- Select a local folder to share your music/media library.
+**Result:**  
+Uploader and Instance B only see the IP of Instance A. The downloader's personal IP is never revealed! This model places bandwidth cost on instance operators as a necessary trade-off for guaranteed user privacy.
 
----
+### 🔑 SSH Foundation
 
-## Screenshots
-
-> *(Add screenshots of the chat, search, file transfer, and network panels here)*
-
----
-
-## How It Works
-
-### Authentication
-- Users log in with a nickname and an SSH keypair (generated and stored locally).
-- The server keeps a registry of nicknames and their associated public keys.
-
-### File Sharing
-- Users select a folder to share; the client broadcasts the file list to the server.
-- Other users can search and request files, triggering peer-to-peer transfers via SSH channels.
-
-### Chat & Search
-- All chat messages and search requests are relayed through the SSH subsystem.
-- The server maintains global state and relays messages to all connected clients.
-
-### Transfers
-- File downloads are chunked and base64-encoded over SSH, with real-time progress and error handling.
-- The server tracks current and historical transfer counts.
-
-### Network Status
-- Visit `http://127.0.0.1:8080/` on the server to see live stats: users online, active transfers, total transfers, and more.
+All communication between a user's client application and their home instance is tunneled through an SSH connection. This provides robust, industry-standard encryption for all chats, commands, and file transfer initializations.
 
 ---
 
-## Folder Structure
+## 🚀 Future Roadmap
 
-### Client (Flutter)
-```
-main.dart
-/models/search_result.dart
-/services/ssh_chat_service.dart
-/ui/desktop/...
-```
+While the core functionality is complete, several areas are targeted for future improvement:
 
-### Server (Go)
-```
-main.go
-chat.go
-files.go
-protocol.go
-status.go
-```
+- **Federated User Profiles**  
+  Implement the `GET /api/s2s/user/{user_address}` endpoint to allow viewing basic profile information of users on other instances.
+
+- **Private Messaging**  
+  Develop one-to-one private messaging using a combination of S2S relays and key-based encryption.
+
+- **Enhanced S2S Authentication**  
+  Upgrade S2S authentication from the current shared secret to a model where each instance signs outgoing requests with a dedicated private key.
+
+- **Client-Side Refinements**  
+  Improve the UI/UX of desktop and mobile clients, with better error handling for federated actions and smoother user experience.
 
 ---
 
-## Security Notes
+## 🤝 Contributing
 
-- All network traffic is encrypted via SSH.
-- Nicknames are globally unique and tied to SSH public keys.
-- Server does **not** store user files, only metadata needed for transfers.
+Interested in helping build the future of private, federated communication? Check out our issues, fork the repo, and send a PR! We welcome your input.
 
 ---
 
-## Roadmap
+## 💬 Community
 
-- [ ] Multi-relay/server support
-- [ ] User avatars and presence indicators
-- [ ] Mobile client (Flutter)
-- [ ] Improved search (fuzzy, genre, etc.)
-- [ ] User-configurable sharing permissions
+Questions? Ideas? Join the discussion on our community chat or open an issue!
 
 ---
-
-## License
-
-MIT License
-
----
-
-## Credits
-
-- Inspired by the spirit of WinMX, Soulseek, and other classic P2P platforms.
-- Built using Flutter, Go, and SSH.
-
----
-
-*RoseWire — Inspired by the classics, built for the future.*
