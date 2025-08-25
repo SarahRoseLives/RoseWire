@@ -41,16 +41,12 @@ class SshFileService {
     final SSHClient _client;
     final void Function(String, [Map<String, dynamic>?]) _sendCommand;
     final String _nickname;
+    final void Function(List<SearchResult>) _onSearchResults;
+    final void Function(List<Transfer>) _onTransfersUpdate;
 
     static const int _numStreams = 50;
     String? _libraryPath;
     bool _disposed = false;
-
-    final _searchResultController = StreamController<List<SearchResult>>.broadcast();
-    Stream<List<SearchResult>> get searchResults => _searchResultController.stream;
-
-    final _transferController = StreamController<List<Transfer>>.broadcast();
-    Stream<List<Transfer>> get transfers => _transferController.stream;
 
     final Map<String, Transfer> _activeTransfers = {};
 
@@ -58,9 +54,13 @@ class SshFileService {
         required SSHClient client,
         required void Function(String, [Map<String, dynamic>?]) sendCommand,
         required String nickname,
+        required void Function(List<SearchResult>) onSearchResults,
+        required void Function(List<Transfer>) onTransfersUpdate,
     })  : _client = client,
           _sendCommand = sendCommand,
-          _nickname = nickname;
+          _nickname = nickname,
+          _onSearchResults = onSearchResults,
+          _onTransfersUpdate = onTransfersUpdate;
 
     Future<void> setLibraryPath(String path) async {
         _libraryPath = path;
@@ -81,6 +81,7 @@ class SshFileService {
     void downloadFile(String fileName, int size, String peer) {
         if (_libraryPath == null) {
             print("[System] Cannot download: Library path not set.");
+            _onTransfersUpdate(_activeTransfers.values.toList());
             return;
         }
         _sendCommand('get_file', {'fileName': fileName, 'peer': peer});
@@ -118,7 +119,7 @@ class SshFileService {
                 peer: map['peer'] as String,
             );
         }).toList();
-        if (!_disposed) _searchResultController.add(results);
+        if (!_disposed) _onSearchResults(results);
     }
 
     void _handleUploadRequest(Map<String, dynamic> payload) async {
@@ -153,10 +154,9 @@ class SshFileService {
                         dataSession = await _client.execute(subsystem);
                         final fileStream = file.openRead(startByte, endByte);
                         await dataSession.stdin.addStream(fileStream.map((chunk) => Uint8List.fromList(chunk)));
-                        await dataSession.stdin.close();
-                        await dataSession.done;
-                    } catch (e) {
-                        // Error handling
+                    } finally {
+                        await dataSession?.stdin.close();
+                        await dataSession?.done;
                     }
                 }());
             }
@@ -184,27 +184,30 @@ class SshFileService {
             startedAt: DateTime.now(),
         );
         _activeTransfers[transferID] = newTransfer;
-        if (!_disposed) _transferController.add(_activeTransfers.values.toList());
+        if (!_disposed) _onTransfersUpdate(_activeTransfers.values.toList());
+
+        RandomAccessFile? finalFileSink;
+        List<File> partFiles = [];
 
         try {
             if (_libraryPath == null) throw Exception("Library path is not set.");
 
             final tempDir = await getTemporaryDirectory();
             final downloadFutures = <Future>[];
-            final partFiles = <String>[];
             int totalBytesDownloaded = 0;
             var lastUpdateTime = DateTime.now();
 
             for (int i = 0; i < _numStreams; i++) {
                 final partPath = p.join(tempDir.path, '$transferID.part$i');
-                partFiles.add(partPath);
+                partFiles.add(File(partPath));
 
                 downloadFutures.add(() async {
                     SSHSession? dataSession;
+                    IOSink? sink;
                     try {
                         final subsystem = 'subsystem:data-transfer:$transferID:$i';
                         dataSession = await _client.execute(subsystem);
-                        final sink = File(partPath).openWrite();
+                        sink = partFiles[i].openWrite();
 
                         await for (final chunk in dataSession.stdout) {
                             sink.add(chunk);
@@ -213,16 +216,22 @@ class SshFileService {
                                 newTransfer.progress = totalBytesDownloaded / newTransfer.size;
                             }
 
+                            // --- START FIX ---
+                            // Yield to the event loop after every single chunk is processed.
+                            // This is more aggressive and ensures the UI thread can always
+                            // process paint and touch events, preventing lock-ups.
+                            await Future.delayed(Duration.zero);
+                            // --- END FIX ---
+
                             final now = DateTime.now();
                             if (now.difference(lastUpdateTime).inMilliseconds > 100) {
-                                if (!_disposed) _transferController.add(_activeTransfers.values.toList());
+                                if (!_disposed) _onTransfersUpdate(_activeTransfers.values.toList());
                                 lastUpdateTime = now;
                             }
                         }
-                        await sink.close();
-                        await dataSession.done;
-                    } catch (e) {
-                        rethrow;
+                    } finally {
+                        await sink?.close();
+                        await dataSession?.done;
                     }
                 }());
             }
@@ -230,22 +239,34 @@ class SshFileService {
             await Future.wait(downloadFutures);
 
             final finalPath = p.join(_libraryPath!, filename);
-            final finalFileSink = File(finalPath).openWrite();
-            for (final partPath in partFiles) {
-                final partFile = File(partPath);
-                await finalFileSink.addStream(partFile.openRead());
-                await partFile.delete();
+            finalFileSink = await File(finalPath).open(mode: FileMode.write);
+            for (final partFile in partFiles) {
+                if (await partFile.exists()) {
+                    await finalFileSink.writeFrom(await partFile.readAsBytes());
+                    await partFile.delete();
+                }
             }
-            await finalFileSink.close();
 
             newTransfer.status = TransferStatus.complete;
             newTransfer.progress = 1.0;
             newTransfer.completedAt = DateTime.now();
-            if (!_disposed) _transferController.add(_activeTransfers.values.toList());
+
         } catch (e) {
             newTransfer.status = TransferStatus.failed;
             newTransfer.error = "Download failed: $e";
-            if (!_disposed) _transferController.add(_activeTransfers.values.toList());
+            print("!!! DOWNLOAD FAILED: $e");
+        } finally {
+            await finalFileSink?.close();
+            for (final partFile in partFiles) {
+                if (await partFile.exists()) {
+                    try {
+                      await partFile.delete();
+                    } catch (e) {
+                      print("Error deleting temp file: $e");
+                    }
+                }
+            }
+            if (!_disposed) _onTransfersUpdate(_activeTransfers.values.toList());
         }
     }
 
@@ -259,12 +280,10 @@ class SshFileService {
 
         transfer.status = TransferStatus.failed;
         transfer.error = errorMsg;
-        if (!_disposed) _transferController.add(_activeTransfers.values.toList());
+        if (!_disposed) _onTransfersUpdate(_activeTransfers.values.toList());
     }
 
     void dispose() {
         _disposed = true;
-        _searchResultController.close();
-        _transferController.close();
     }
 }

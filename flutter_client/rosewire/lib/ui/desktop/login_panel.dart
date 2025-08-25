@@ -144,8 +144,8 @@ class _LoginPanelState extends State<LoginPanel> {
     try {
       final privateKey = await File(_selectedKeyPath!).readAsString();
 
-      // Changed from 'localhost' to 'sarahsforge.dev'
-      final socket = await SSHSocket.connect('sarahsforge.dev', 2222);
+      // Changed from 'localhost' to '192.168.1.240'
+      final socket = await SSHSocket.connect('192.168.1.240', 2222);
 
       client = SSHClient(
         socket,

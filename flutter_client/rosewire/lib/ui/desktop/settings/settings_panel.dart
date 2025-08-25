@@ -19,7 +19,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
   @override
   void initState() {
     super.initState();
-    final host = widget.chatService?.host ?? 'sarahsforge.dev';
+    final host = widget.chatService?.host ?? '192.168.1.240';
     setState(() {
       _currentServer = host;
       _serverController.text = host;
@@ -61,7 +61,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
             TextField(
               controller: _serverController,
               decoration: InputDecoration(
-                hintText: "sarahsforge.dev",
+                hintText: "192.168.1.240",
                 hintStyle: TextStyle(color: roseWhite.withOpacity(0.5)),
                 filled: true,
                 fillColor: roseGray.withOpacity(0.85),

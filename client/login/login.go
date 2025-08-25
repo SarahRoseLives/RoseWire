@@ -1,7 +1,6 @@
 package login
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -55,7 +54,7 @@ var (
 
 const (
 	configPathDefault = ".rosewire_client"
-	relayAddrDefault  = "127.0.0.1:2222"
+	relayAddrDefault  = "rosewire.rosevines.network:2222" // Updated to new server
 )
 
 type Model struct {
@@ -178,6 +177,7 @@ func createSSHKeyCmd() tea.Cmd {
 	}
 }
 
+// FIX APPLIED: login validation now requests the "chat" subsystem, not a shell.
 func tryLoginCmd(nickname, pubkeypath string) tea.Cmd {
 	return func() tea.Msg {
 		// Guess private key path for pubkey (strip .pub)
@@ -200,24 +200,23 @@ func tryLoginCmd(nickname, pubkeypath string) tea.Cmd {
 		}
 		client, err := ssh.Dial("tcp", relayAddrDefault, config)
 		if err != nil {
-			return loginResultMsg{false, "SSH login failed: " + err.Error()}
+			return loginResultMsg{false, "SSH dial failed: " + err.Error()}
 		}
 		defer client.Close()
+
+		// --- Start of Changed Block ---
+		// Instead of requesting a shell, request the "chat" subsystem to match app requirements.
 		session, err := client.NewSession()
 		if err != nil {
 			return loginResultMsg{false, "Session error: " + err.Error()}
 		}
 		defer session.Close()
-		var buf bytes.Buffer
-		session.Stdout = &buf
-		session.Stderr = &buf
-		_ = session.Shell()
-		time.Sleep(200 * time.Millisecond)
-		session.Close()
-		msg := strings.TrimSpace(buf.String())
-		if !strings.Contains(msg, "RoseWire relay") {
-			return loginResultMsg{false, "Unexpected server response"}
+
+		if err := session.RequestSubsystem("chat"); err != nil {
+			return loginResultMsg{false, "Server rejected chat request: " + err.Error()}
 		}
+		// --- End of Changed Block ---
+
 		// Save combo
 		saveLogin(nickname, pubkeypath)
 		return loginResultMsg{true, ""}

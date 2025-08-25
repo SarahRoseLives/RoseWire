@@ -16,7 +16,7 @@ class _SearchPanelState extends State<SearchPanel> {
   final _searchController = TextEditingController();
   StreamSubscription? _searchSubscription;
   List<SearchResult> _results = [];
-  bool _isLoading = false;
+  bool _isLoading = true;
   bool _hasSearched = false;
 
   @override
@@ -30,7 +30,7 @@ class _SearchPanelState extends State<SearchPanel> {
         });
       }
     });
-    widget.chatService.fetchTopFiles();
+    // Make sure this line is deleted, not just commented out
   }
 
   @override
@@ -62,61 +62,18 @@ class _SearchPanelState extends State<SearchPanel> {
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (!_hasSearched && _results.isEmpty) {
-      return const Center(
+
+    if (_results.isEmpty) {
+      return Center(
         child: Text(
-          'Loading top shared files...',
-          style: TextStyle(color: roseWhite, fontSize: 16),
+          _hasSearched
+              ? 'No results found for your query.'
+              : 'No shared files available.',
+          style: const TextStyle(color: roseWhite, fontSize: 16),
         ),
       );
     }
-    if (!_hasSearched && _results.isNotEmpty) {
-      return ListView.builder(
-        itemCount: _results.length,
-        itemBuilder: (context, idx) {
-          final item = _results[idx];
-          return Card(
-            elevation: 4,
-            margin: const EdgeInsets.symmetric(vertical: 8),
-            color: roseGray.withOpacity(0.85),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: BorderSide(
-                color: rosePink.withOpacity(0.2),
-                width: 1.2,
-              ),
-            ),
-            child: ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: rosePink,
-                child: Icon(Icons.music_note, color: roseWhite),
-              ),
-              title: Text(item.fileName, style: const TextStyle(color: roseWhite, fontWeight: FontWeight.bold, fontSize: 16)),
-              subtitle: Text(
-                item.formattedSize,
-                style: TextStyle(color: roseWhite.withOpacity(0.7)),
-              ),
-              trailing: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(item.peer, style: const TextStyle(color: rosePink, fontWeight: FontWeight.bold)),
-                  Text("Peer", style: TextStyle(color: roseWhite.withOpacity(0.6), fontSize: 12)),
-                ],
-              ),
-              onTap: () => _downloadFile(item),
-            ),
-          );
-        },
-      );
-    }
-    if (_hasSearched && _results.isEmpty) {
-      return const Center(
-        child: Text(
-          'No results found for your query.',
-          style: TextStyle(color: roseWhite, fontSize: 16),
-        ),
-      );
-    }
+
     return ListView.builder(
       itemCount: _results.length,
       itemBuilder: (context, idx) {

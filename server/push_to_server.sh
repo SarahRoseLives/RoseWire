@@ -3,7 +3,7 @@
 # Variables
 LOCAL_BINARY="rosewire-server"
 REMOTE_USER="rose"
-REMOTE_HOST="sarahsforge.dev"
+REMOTE_HOST="rosewire.rosevines.network"
 REMOTE_PATH="/home/rose/rosewire-server"
 
 PASSWORD="Srl0971304404741050!"

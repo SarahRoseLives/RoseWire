@@ -7,36 +7,39 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss" // <-- FIX IS HERE
 )
 
 type tab int
 
+// The new tab layout
 const (
 	tabSearch tab = iota
-	tabShared
-	tabDownloads
-	tabPeers
-	tabLogs
+	tabTransfers
+	tabLibrary
+	tabChat
+	tabNetwork
+	tabSettings
 	numTabs
 )
 
-var tabLabels = []string{"Search", "Shared", "Downloads", "Peers", "Logs/Chat"}
+// Updated labels for the tabs
+var tabLabels = []string{"Search", "Transfers", "Library", "Chat", "Network", "Settings"}
 
-// searchResult is now defined in search.go
+// Data structures for different panels
+type searchResult struct {
+	FileName string
+	Peer     string
+	Size     string
+	rawSize  int64
+}
 
-type sharedFile struct {
+type libraryFile struct {
 	Name    string
 	IsDir   bool
 	Size    string
-	rawSize int64 // For internal use
-}
-
-type download struct {
-	FileName string
-	Progress string
-	Status   string
-	Source   string
+	rawSize int64
+	Type    string // "Shared" or "Downloaded"
 }
 
 type peer struct {
@@ -50,28 +53,39 @@ type logEntry struct {
 	Message string
 }
 
+// Main Model
 type Model struct {
 	Nickname string
 	Key      string
-	CurrentTab tab
-	Cursor     int
-	Width      int
-	Height     int
-	Input      string // For search box
-	InputMode  bool   // True if editing search input
+	Width    int
+	Height   int
+	Cursor   int
 
-	// Chat integration
-	chatClient *ChatClient
+	// State
+	CurrentTab tab
+	InputMode  bool // For search box
+	Input      string
+
+	// Chat
+	chatClient    *ChatClient
 	chatInput     string
 	chatInputMode bool
 
-	// Data stores
+	// Data stores for panels
 	SearchResults []searchResult
-	SharedFiles   []sharedFile
-	Downloads     []download
+	LibraryFiles  []libraryFile // A single list for the library panel
 	Peers         []peer
 	Logs          []logEntry
 }
+
+// --- Bubble Tea Messages ---
+
+type searchResultsMsg []searchResult
+type sharedFilesLoadedMsg []libraryFile
+type downloadsLoadedMsg []libraryFile
+type chatLineMsg string
+
+// --- Styles ---
 
 var (
 	pink           = lipgloss.Color("#ff81b3")
@@ -84,37 +98,13 @@ var (
 	normalStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 )
 
-// --- Chat message event for Bubble Tea
-type chatLineMsg string
-
-// chatLineListener now dispatches between search results and chat messages.
-func chatLineListener(c *ChatClient) tea.Cmd {
-	return func() tea.Msg {
-		line, ok := <-c.Receive()
-		if !ok {
-			return nil
-		}
-
-		if strings.HasPrefix(line, "[SEARCH] ") {
-			payload := strings.TrimPrefix(line, "[SEARCH] ")
-			return ParseSearchResults(payload)
-		}
-
-		return chatLineMsg(line)
-	}
-}
-
 func NewModel(nickname, key string, client *ChatClient) Model {
 	return Model{
-		Nickname: nickname,
-		Key:      key,
-		// Pass the already-connected client
-		chatClient: client,
-		// Start with empty search results
+		Nickname:      nickname,
+		Key:           key,
+		chatClient:    client,
 		SearchResults: []searchResult{},
-		// SharedFiles and Downloads are now populated from the filesystem
-		SharedFiles: []sharedFile{},
-		Downloads:   []download{},
+		LibraryFiles:  []libraryFile{},
 		Peers: []peer{
 			{"alice", "host2", true},
 			{"bob", "host3", false},
@@ -129,127 +119,59 @@ func NewModel(nickname, key string, client *ChatClient) Model {
 func (m Model) Init() tea.Cmd {
 	// Listen for chat messages and scan local file directories at startup
 	return tea.Batch(
-		chatLineListener(m.chatClient),
-		ScanUploadsCmd(),
+		listenForChat(m.chatClient),
+		ScanSharedCmd(),
 		ScanDownloadsCmd(),
 	)
 }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	// Handle the list of files from the local 'uploads' scan
-	case SharedFilesLoadedMsg:
-		m.SharedFiles = msg
-		// After loading our files, create a command to notify the server
-		return m, NotifyServerOfSharedFilesCmd(m.chatClient, m.SharedFiles)
+	// Handle newly scanned shared files
+	case sharedFilesLoadedMsg:
+		// Remove old shared files and add new ones
+		m.LibraryFiles = filterLibrary(m.LibraryFiles, "Downloaded")
+		m.LibraryFiles = append(m.LibraryFiles, msg...)
+		// Notify server of our shared files
+		return m, NotifyServerOfSharedFilesCmd(m.chatClient, msg)
 
-	// Handle the list of files from the local 'downloads' scan
-	case DownloadsLoadedMsg:
-		m.Downloads = msg
+	// Handle newly scanned downloaded files
+	case downloadsLoadedMsg:
+		// Remove old downloaded files and add new ones
+		m.LibraryFiles = filterLibrary(m.LibraryFiles, "Shared")
+		m.LibraryFiles = append(m.LibraryFiles, msg...)
 		return m, nil
 
-	// Handle incoming search results
-	case SearchResultsMsg:
+	case searchResultsMsg:
 		m.SearchResults = msg
 		return m, nil
 
 	case chatLineMsg:
-		// Handle a new chat message
 		entry := ParseChatLine(string(msg))
 		m.Logs = append(m.Logs, logEntry{
 			Time:    entry.Time,
 			Message: fmt.Sprintf("%s: %s", entry.Sender, entry.Message),
 		})
-		// Listen for the next chat message
-		return m, chatLineListener(m.chatClient)
+		return m, listenForChat(m.chatClient)
 
-	// A log entry can now be a message
 	case logEntry:
 		m.Logs = append(m.Logs, msg)
 		return m, nil
 
 	case tea.KeyMsg:
-		// Chat input mode
-		if m.CurrentTab == tabLogs && m.chatInputMode {
-			switch msg.String() {
-			case "enter":
-				if strings.TrimSpace(m.chatInput) != "" && m.chatClient != nil {
-					m.chatClient.Send(m.chatInput)
-					m.Logs = append(m.Logs, logEntry{
-						Time:    time.Now().Format("[15:04]"),
-						Message: fmt.Sprintf("%s: %s", m.Nickname, m.chatInput),
-					})
-				}
-				m.chatInput = ""
-				m.chatInputMode = false
-			case "esc":
-				m.chatInput = ""
-				m.chatInputMode = false
-			case "backspace":
-				if len(m.chatInput) > 0 {
-					m.chatInput = m.chatInput[:len(m.chatInput)-1]
-				}
-			default:
-				if msg.Type == tea.KeyRunes {
-					m.chatInput += msg.String()
-				}
-			}
-			return m, nil
+		// Handle chat input mode
+		if m.CurrentTab == tabChat && m.chatInputMode {
+			return updateChatInput(m, msg)
 		}
-		switch {
-		case m.InputMode:
-			switch msg.String() {
-			case "enter":
-				m.InputMode = false
-				if m.CurrentTab == tabSearch && strings.TrimSpace(m.Input) != "" {
-					return m, SearchCmd(m.chatClient, m.Input)
-				}
-			case "esc":
-				m.InputMode = false
-			case "backspace":
-				if len(m.Input) > 0 {
-					m.Input = m.Input[:len(m.Input)-1]
-				}
-			default:
-				if msg.Type == tea.KeyRunes {
-					m.Input += msg.String()
-				}
-			}
-		default:
-			switch msg.String() {
-			case "ctrl+c", "q":
-				if m.chatClient != nil {
-					m.chatClient.Close()
-				}
-				return m, tea.Quit
-			case "tab":
-				m.CurrentTab = (m.CurrentTab + 1) % numTabs
-				m.Cursor = 0
-			case "shift+tab":
-				m.CurrentTab = (m.CurrentTab - 1 + numTabs) % numTabs
-				m.Cursor = 0
-			case "up", "k":
-				if m.Cursor > 0 {
-					m.Cursor--
-				}
-			case "down", "j":
-				m.Cursor++
-			case "enter":
-				if m.CurrentTab == tabSearch && !m.InputMode {
-					m.InputMode = true
-					m.Input = ""
-				} else if m.CurrentTab == tabLogs && !m.chatInputMode {
-					m.chatInputMode = true
-				}
-			case "r": // Refresh list
-				if m.CurrentTab == tabShared {
-					return m, ScanUploadsCmd()
-				}
-				if m.CurrentTab == tabDownloads {
-					return m, ScanDownloadsCmd()
-				}
-			}
+		// Handle search input mode
+		if m.CurrentTab == tabSearch && m.InputMode {
+			var cmd tea.Cmd
+			m, cmd = updateSearchInput(m, msg)
+			return m, cmd
 		}
+		// Handle global key presses
+		return updateGlobalKeys(m, msg)
+
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
@@ -260,123 +182,155 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 func (m Model) View() string {
 	var b strings.Builder
 
-	// Pink header, stretch to width
+	// Header
 	header := pinkHeader.Width(m.Width).Render(fmt.Sprintf("🌹 RoseWire - [%s | %s]", m.Nickname, filepath.Base(m.Key)))
 	b.WriteString(header + "\n")
 
-	// Tabs - use pink for active, stretch to width
+	// Tabs
 	var tabViews []string
 	for i, label := range tabLabels {
+		style := tabStyle
 		if tab(i) == m.CurrentTab {
-			tabViews = append(tabViews, activeTabStyle.Render(label))
-		} else {
-			tabViews = append(tabViews, tabStyle.Render(label))
+			style = activeTabStyle
 		}
+		tabViews = append(tabViews, style.Render(label))
 	}
 	tabsRow := lipgloss.JoinHorizontal(lipgloss.Top, tabViews...)
-	tabsLine := lipgloss.NewStyle().Width(m.Width).Render(tabsRow)
-	b.WriteString(tabsLine + "\n")
-
-	// Horizontal line (fill width)
+	b.WriteString(lipgloss.NewStyle().Width(m.Width).Render(tabsRow) + "\n")
 	b.WriteString(lipgloss.NewStyle().Foreground(pink).Width(m.Width).Render(strings.Repeat("─", m.Width)) + "\n")
 
-	// Panel
+	// Panel Content
 	switch m.CurrentTab {
 	case tabSearch:
 		b.WriteString(renderSearchPanel(m))
-	case tabShared:
-		b.WriteString(renderSharedPanel(m))
-	case tabDownloads:
-		b.WriteString(renderDownloadsPanel(m))
-	case tabPeers:
-		b.WriteString(renderPeersPanel(m))
-	case tabLogs:
-		b.WriteString(renderLogsPanel(m))
+	case tabTransfers:
+		b.WriteString(renderTransfersPanel(m))
+	case tabLibrary:
+		b.WriteString(renderLibraryPanel(m))
+	case tabChat:
+		b.WriteString(renderChatPanel(m))
+	case tabNetwork:
+		b.WriteString(renderNetworkPanel(m))
+	case tabSettings:
+		b.WriteString(renderSettingsPanel(m))
 	}
 
-	// Footer - fill width
+	// Footer
 	footer := footerStyle.Width(m.Width).Render("[Tab] Switch Panel  [↑/↓] Move  [Enter] Select/Edit/Chat  [R] Refresh [Q] Quit")
 	b.WriteString("\n" + footer)
 	return b.String()
 }
 
-// renderSearchPanel moved to search.go
+// --- Update Helpers ---
 
-func renderSharedPanel(m Model) string {
-	var b strings.Builder
-	b.WriteString(sectionTitle.Render(fmt.Sprintf("Shared Files (from your '%s' folder):\n", uploadsDir)))
-	line := lipgloss.NewStyle().Foreground(pink).Width(m.Width).Render(strings.Repeat("-", m.Width))
-	b.WriteString(line + "\n")
-	header := fmt.Sprintf("%-2s %-30s %-10s", "", "Name", "Size")
-	b.WriteString(sectionTitle.Render(header) + "\n")
-	b.WriteString(line + "\n")
-
-	if len(m.SharedFiles) == 0 {
-		b.WriteString("\n  No files found in the 'uploads' directory.\n")
-	}
-
-	for i, f := range m.SharedFiles {
-		cursor := " "
-		if i == m.Cursor {
-			cursor = cursorStyle.Render(">")
+func updateGlobalKeys(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		if m.chatClient != nil {
+			m.chatClient.Close()
 		}
-		name := f.Name
-		if f.IsDir {
-			name = filepath.Join(name, "/")
+		return m, tea.Quit
+	case "tab":
+		m.CurrentTab = (m.CurrentTab + 1) % numTabs
+		m.Cursor = 0
+	case "shift+tab":
+		m.CurrentTab = (m.CurrentTab - 1 + numTabs) % numTabs
+		m.Cursor = 0
+	case "up", "k":
+		if m.Cursor > 0 {
+			m.Cursor--
 		}
-		row := fmt.Sprintf("%s %-30s %-10s", cursor, name, f.Size)
-		b.WriteString(row + "\n")
+	case "down", "j":
+		m.Cursor++ // We'll clamp this in each panel's view logic
+	case "enter":
+		if m.CurrentTab == tabSearch && !m.InputMode {
+			m.InputMode = true
+			m.Input = ""
+		} else if m.CurrentTab == tabChat && !m.chatInputMode {
+			m.chatInputMode = true
+		}
+	case "r": // Refresh list
+		if m.CurrentTab == tabLibrary {
+			return m, tea.Batch(ScanSharedCmd(), ScanDownloadsCmd())
+		}
 	}
-	b.WriteString("\n" + cursorStyle.Render("[R] Refresh List") + "\n")
-	return b.String()
+	return m, nil
 }
 
-func renderPeersPanel(m Model) string {
-	var b strings.Builder
-	b.WriteString(sectionTitle.Render("Peers:\n"))
-	line := lipgloss.NewStyle().Foreground(pink).Width(m.Width).Render(strings.Repeat("-", m.Width))
-	b.WriteString(line + "\n")
-	header := fmt.Sprintf("%-2s %-10s %-14s %-9s", "", "Name", "Host", "Status")
-	b.WriteString(sectionTitle.Render(header) + "\n")
-	b.WriteString(line + "\n")
-	for i, p := range m.Peers {
-		cursor := " "
-		if i == m.Cursor {
-			cursor = cursorStyle.Render(">")
+func updateSearchInput(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.InputMode = false
+		if strings.TrimSpace(m.Input) != "" {
+			return m, SearchCmd(m.chatClient, m.Input)
 		}
-		status := normalStyle.Render("OFFLINE")
-		if p.Online {
-			status = cursorStyle.Render("ONLINE")
+	case "esc":
+		m.InputMode = false
+	case "backspace":
+		if len(m.Input) > 0 {
+			m.Input = m.Input[:len(m.Input)-1]
 		}
-		row := fmt.Sprintf("%s %-10s %-14s %-9s %s", cursor, p.Name, p.Host, status, cursorStyle.Render("[Remove]"))
-		b.WriteString(row + "\n")
+	default:
+		if msg.Type == tea.KeyRunes {
+			m.Input += msg.String()
+		}
 	}
-	b.WriteString("\n" + cursorStyle.Render("[A] Add peer (by SSH endpoint)") + "\n")
-	return b.String()
+	return m, nil
 }
 
-func renderLogsPanel(m Model) string {
-	var b strings.Builder
-	b.WriteString(sectionTitle.Render("Logs & Chat:\n"))
-	line := lipgloss.NewStyle().Foreground(pink).Width(m.Width).Render(strings.Repeat("-", m.Width))
-	b.WriteString(line + "\n")
-	// Render logs from the bottom up to keep recent messages visible
-	maxLogs := m.Height - 12 // Heuristic for available space
-	if maxLogs < 1 {
-		maxLogs = 1
+func updateChatInput(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		if strings.TrimSpace(m.chatInput) != "" {
+			m.chatClient.Send(m.chatInput)
+			m.Logs = append(m.Logs, logEntry{
+				Time:    time.Now().Format("[15:04]"),
+				Message: fmt.Sprintf("%s: %s", m.Nickname, m.chatInput),
+			})
+		}
+		m.chatInput = ""
+		m.chatInputMode = false
+	case "esc":
+		m.chatInput = ""
+		m.chatInputMode = false
+	case "backspace":
+		if len(m.chatInput) > 0 {
+			m.chatInput = m.chatInput[:len(m.chatInput)-1]
+		}
+	default:
+		if msg.Type == tea.KeyRunes {
+			m.chatInput += msg.String()
+		}
 	}
-	start := len(m.Logs) - maxLogs
-	if start < 0 {
-		start = 0
+	return m, nil
+}
+
+// --- Chat Listener ---
+
+// listenForChat dispatches between search results and chat messages.
+func listenForChat(c *ChatClient) tea.Cmd {
+	return func() tea.Msg {
+		line, ok := <-c.Receive()
+		if !ok {
+			return nil // Channel closed
+		}
+		// Handle search results command from server
+		if strings.HasPrefix(line, "[SEARCH] ") {
+			payload := strings.TrimPrefix(line, "[SEARCH] ")
+			return ParseSearchResults(payload)
+		}
+		// Default to a regular chat line
+		return chatLineMsg(line)
 	}
-	for _, entry := range m.Logs[start:] {
-		b.WriteString(fmt.Sprintf("%-7s %s\n", entry.Time, entry.Message))
+}
+
+// utility to filter the library slice
+func filterLibrary(files []libraryFile, keepType string) []libraryFile {
+	var filtered []libraryFile
+	for _, f := range files {
+		if f.Type == keepType {
+			filtered = append(filtered, f)
+		}
 	}
-	// Chat input bar
-	if m.chatInputMode {
-		b.WriteString("\n> " + m.chatInput + "_\n")
-	} else {
-		b.WriteString("\n[Enter] Type a chat message\n")
-	}
-	return b.String()
+	return filtered
 }

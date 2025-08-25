@@ -42,7 +42,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
   @override
   void initState() {
     super.initState();
-    _sshChatService = SshChatService(); // Default host is sarahsforge.dev
+    _sshChatService = SshChatService(); // Default host is 192.168.1.240
 
     _panels = [
       SearchPanel(chatService: _sshChatService),

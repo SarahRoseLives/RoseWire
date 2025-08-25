@@ -1,18 +1,51 @@
 import 'package:flutter/material.dart';
+import 'dart:io' show Platform;
+
+// Desktop-specific UI components
 import 'ui/desktop/login_panel.dart';
 import 'ui/desktop/rosewire_desktop.dart';
 
+// Mobile-specific UI root
+import 'ui/app/rosewire_app.dart';
+
 void main() {
-  runApp(const RoseWireApp());
+  // Check if the platform is mobile (Android or iOS)
+  // and run the corresponding app version.
+  if (Platform.isAndroid || Platform.isIOS) {
+    runApp(const RoseWireMobileApp());
+  } else {
+    runApp(const RoseWireDesktopApp());
+  }
 }
 
-class RoseWireApp extends StatefulWidget {
-  const RoseWireApp({super.key});
+/// A wrapper for the Mobile UI.
+/// This provides the MaterialApp needed for the mobile screens.
+class RoseWireMobileApp extends StatelessWidget {
+  const RoseWireMobileApp({super.key});
+
   @override
-  State<RoseWireApp> createState() => _RoseWireAppState();
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'RoseWire',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        useMaterial3: true,
+      ),
+      home: const RoseWireAppMobile(), // The root widget for mobile
+    );
+  }
 }
 
-class _RoseWireAppState extends State<RoseWireApp> {
+/// The original app class, renamed to specify it's for Desktop.
+/// Its logic remains the same.
+class RoseWireDesktopApp extends StatefulWidget {
+  const RoseWireDesktopApp({super.key});
+  @override
+  State<RoseWireDesktopApp> createState() => _RoseWireDesktopAppState();
+}
+
+class _RoseWireDesktopAppState extends State<RoseWireDesktopApp> {
   bool _loggedIn = false;
   String? _nickname;
   String? _keyPath; // Path to selected private key

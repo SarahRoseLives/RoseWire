@@ -54,7 +54,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// Create and connect chat client
-			chatClient := home.NewChatClient(m.login.Nickname, m.login.SelectedKey, "127.0.0.1:2222")
+			chatClient := home.NewChatClient(m.login.Nickname, m.login.SelectedKey, "rosewire.rosevines.network:2222") // Updated server address
 			go func() {
 				err := chatClient.Connect()
 				if err != nil {

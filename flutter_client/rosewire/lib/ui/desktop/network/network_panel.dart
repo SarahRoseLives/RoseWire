@@ -31,11 +31,11 @@ class _NetworkPanelState extends State<NetworkPanel> {
         }
       }
     });
-    // Request stats when the panel loads
-    widget.chatService.requestStats();
-    setState(() {
-      _loading = true;
-    });
+    // -- REMOVE THESE TWO LINES --
+    // widget.chatService.requestStats();
+    // setState(() {
+    //   _loading = true;
+    // });
   }
 
   @override

@@ -16,16 +16,22 @@ class SshChatService {
 
     SshFileService? _fileService;
 
+    // -- MOVE CONTROLLERS HERE & MAKE PUBLIC STREAMS DIRECT --
+    final _searchResultController = StreamController<List<SearchResult>>.broadcast();
+    final _transferController = StreamController<List<Transfer>>.broadcast();
     final _messageController = StreamController<Map<String, dynamic>>.broadcast();
+
+    Stream<List<SearchResult>> get searchResults => _searchResultController.stream;
+    Stream<List<Transfer>> get transfers => _transferController.stream;
     Stream<Map<String, dynamic>> get messages => _messageController.stream;
 
-    SshChatService({String host = 'sarahsforge.dev', int port = 2222})
+    SshChatService({String host = '192.168.1.240', int port = 2222})
         : _host = host,
           _port = port;
 
-    // Proxy properties and methods from SshFileService
-    Stream<List<SearchResult>> get searchResults => _fileService?.searchResults ?? Stream.value([]);
-    Stream<List<Transfer>> get transfers => _fileService?.transfers ?? Stream.value([]);
+    // -- REMOVE THE OLD PROXY GETTERS --
+    // Stream<List<SearchResult>> get searchResults => _fileService?.searchResults ?? Stream.value([]);
+    // Stream<List<Transfer>> get transfers => _fileService?.transfers ?? Stream.value([]);
 
     Future<void> setLibraryPath(String path) async => await _fileService?.setLibraryPath(path);
     void shareFiles(List<Map<String, dynamic>> files) => _fileService?.shareFiles(files);
@@ -61,10 +67,13 @@ class SshChatService {
 
             await _client!.authenticated;
 
+            // -- UPDATE FILE SERVICE CREATION --
             _fileService = SshFileService(
                 client: _client!,
                 sendCommand: _sendCommand,
                 nickname: _nickname!,
+                onSearchResults: _searchResultController.add,
+                onTransfersUpdate: _transferController.add,
             );
 
             _chatSession = await _client!.execute('subsystem:chat');
@@ -84,6 +93,11 @@ class SshChatService {
                         'payload': {'text': "[System] Disconnected from chat.", 'isSystem': true}
                     }),
                 );
+            // -- ADD THIS --
+            // After connection, fetch initial data for panels.
+            requestStats();
+            fetchTopFiles();
+            // -- END --
         } catch (e) {
             _messageController.add({
                 'type': 'system_broadcast',
@@ -155,6 +169,9 @@ class SshChatService {
         _fileService?.dispose();
         _chatSession?.close();
         _client?.close();
+        // -- CLOSE ALL CONTROLLERS --
+        _searchResultController.close();
+        _transferController.close();
         _messageController.close();
     }
 }
