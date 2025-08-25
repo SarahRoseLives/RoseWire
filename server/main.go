@@ -18,14 +18,15 @@ import (
 )
 
 const (
-	serverHost     = "0.0.0.0"
-	serverPort     = 2222
-	hostKeyFile    = "server_ed25519"
-	nickDBFile     = "nicks.db"
-	configFile     = "config.json"
-	httpListenAddr = "0.0.0.0:8080"
+	hostKeyFile = "server_ed25519"
+	nickDBFile  = "nicks.db"
+	configFile  = "config.json"
+	// Default listen addresses are used if not specified in the config.
+	defaultSshListenAddr  = "0.0.0.0:2222"
+	defaultHttpListenAddr = "0.0.0.0:8080"
 )
 
+// DataStreamManager remains the same...
 type DataStreamManager struct {
 	mu      sync.Mutex
 	pending map[string]ssh.Channel
@@ -78,6 +79,7 @@ func (dsm *DataStreamManager) Pair(key string, newChan ssh.Channel) {
 	}()
 }
 
+// NickDB remains the same...
 type NickDB struct {
 	sync.Mutex
 	NickToKey map[string]string
@@ -139,33 +141,29 @@ func ensureHostKey(path string) (ssh.Signer, error) {
 	return ssh.ParsePrivateKey(keyBytes)
 }
 
-// startHttpServer now includes S2S and WebFinger handlers.
-func startHttpServer(cfg *Config, nickDB *NickDB, chatHub *ChatHub) {
-	statusSvc := NewStatusService(chatHub, httpListenAddr)
+func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *ChatHub) {
+	statusSvc := NewStatusService(chatHub, listenAddr)
 	webfingerHandler := &WebFingerHandler{Cfg: cfg, NickDB: nickDB}
-	s2sHandler := NewS2SHandler(cfg, chatHub) // <-- Create the new S2S handler
+	s2sHandler := NewS2SHandler(cfg, chatHub)
 
 	mux := http.NewServeMux()
 
-	// Public routes
 	mux.Handle("/", statusSvc)
 	mux.Handle("/api/status", statusSvc)
 	mux.Handle("/.well-known/webfinger", webfingerHandler)
 
-	// --- FIX: Add the new S2S routes with authentication middleware ---
 	s2sRouter := http.NewServeMux()
 	s2sRouter.HandleFunc("/api/s2s/inbox", s2sHandler.Inbox)
-	// Add other S2S routes like /user/ and /search/ here later
 	mux.Handle("/api/s2s/", s2sHandler.authMiddleware(s2sRouter))
 
-	log.Printf("HTTP services (Status, WebFinger, S2S) listening at http://%s/", httpListenAddr)
-	if err := http.ListenAndServe(httpListenAddr, mux); err != nil {
+	log.Printf("HTTP services (Status, WebFinger, S2S) listening at http://%s/", listenAddr)
+	if err := http.ListenAndServe(listenAddr, mux); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
 }
 
 func main() {
-	fmt.Printf("Starting RoseWire server on %s:%d ...\n", serverHost, serverPort)
+	fmt.Printf("Starting RoseWire server...\n")
 
 	cfg, err := LoadConfig(configFile)
 	if err != nil {
@@ -184,10 +182,21 @@ func main() {
 	}
 
 	fileRegistry := NewFileRegistry()
-	chatHub := NewChatHub(fileRegistry, cfg)
+	s2sClient := NewS2SClient(cfg.SharedSecret)
+	chatHub := NewChatHub(fileRegistry, cfg, s2sClient)
 	dataManager := NewDataStreamManager()
 
-	go startHttpServer(cfg, nickDB, chatHub)
+	// Use listen addresses from config, or defaults if not provided.
+	httpAddr := cfg.HttpListenAddr
+	if httpAddr == "" {
+		httpAddr = defaultHttpListenAddr
+	}
+	go startHttpServer(httpAddr, cfg, nickDB, chatHub)
+
+	sshAddr := cfg.SshListenAddr
+	if sshAddr == "" {
+		sshAddr = defaultSshListenAddr
+	}
 
 	sshConfig := &ssh.ServerConfig{
 		PublicKeyCallback: func(meta ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
@@ -211,11 +220,13 @@ func main() {
 	}
 	sshConfig.AddHostKey(hostSigner)
 
-	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", serverHost, serverPort))
+	// FIX: Use the configured or default SSH address.
+	listener, err := net.Listen("tcp", sshAddr)
 	if err != nil {
-		log.Fatalf("Failed to listen on port %d: %v", serverPort, err)
+		log.Fatalf("Failed to listen for SSH on %s: %v", sshAddr, err)
 	}
 	defer listener.Close()
+	log.Printf("SSH server listening on %s", sshAddr)
 
 	for {
 		nConn, err := listener.Accept()
