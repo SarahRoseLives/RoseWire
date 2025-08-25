@@ -198,3 +198,18 @@ func (h *S2SHandler) handleShareActivity(activity Activity) {
 	h.Hub.fileRegistry.UpdateUserFiles(activity.Actor, shareObj.Files)
 	log.Printf("S2S: Ingested %d shared files from %s into the local registry.", len(shareObj.Files), activity.Actor)
 }
+
+// Peers is an S2S endpoint that returns the server's current list of known peers.
+func (h *S2SHandler) Peers(w http.ResponseWriter, r *http.Request) {
+	h.Hub.mu.Lock()
+	// Create a copy to avoid race conditions while encoding
+	peers := make([]string, len(h.Hub.config.Peers))
+	copy(peers, h.Hub.config.Peers)
+	h.Hub.mu.Unlock()
+
+	log.Printf("S2S Peers: Responding to peer request with %d known peers.", len(peers))
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(peers); err != nil {
+		http.Error(w, "Failed to encode peers", http.StatusInternalServerError)
+	}
+}

@@ -153,3 +153,30 @@ func (c *S2SClient) RelayStream(targetPeerAddress, transferID, streamIndex strin
 	log.Printf("S2S Relay: Successfully sent stream %s:%s", transferID, streamIndex)
 	return nil
 }
+
+// FetchPeers retrieves the list of known peers from another server.
+func (c *S2SClient) FetchPeers(peerAddress string) ([]string, error) {
+	url := fmt.Sprintf("http://%s/api/s2s/peers", peerAddress)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create peers request: %w", err)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send peers request to %s: %w", peerAddress, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("peer server returned non-200 status for peers: %s", resp.Status)
+	}
+
+	var peers []string
+	if err := json.NewDecoder(resp.Body).Decode(&peers); err != nil {
+		return nil, fmt.Errorf("failed to decode peers response: %w", err)
+	}
+
+	return peers, nil
+}

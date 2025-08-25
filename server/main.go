@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -149,6 +150,56 @@ func ensureHostKey(path string) (ssh.Signer, error) {
 	return ssh.ParsePrivateKey(keyBytes)
 }
 
+// startGossipProtocol runs a loop in the background to discover new peers.
+func startGossipProtocol(hub *ChatHub) {
+	log.Println("Gossip protocol starting...")
+	// Ticker will fire every 5 minutes.
+	ticker := time.NewTicker(5 * time.Minute)
+	// Run once immediately at startup.
+	go gossip(hub)
+
+	for range ticker.C {
+		go gossip(hub)
+	}
+}
+
+func gossip(hub *ChatHub) {
+	hub.mu.Lock()
+	if len(hub.config.Peers) == 0 {
+		hub.mu.Unlock()
+		log.Println("Gossip: No peers to gossip with.")
+		return
+	}
+	// Select a random peer to talk to
+	targetPeer := hub.config.Peers[rand.Intn(len(hub.config.Peers))]
+	hub.mu.Unlock()
+
+	log.Printf("Gossip: Gossiping with peer %s", targetPeer)
+	discoveredPeers, err := hub.s2sClient.FetchPeers(targetPeer)
+	if err != nil {
+		log.Printf("Gossip: Failed to fetch peers from %s: %v", targetPeer, err)
+		return
+	}
+
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+
+	// Create a map for quick lookups of existing peers
+	existingPeers := make(map[string]bool)
+	for _, p := range hub.config.Peers {
+		existingPeers[p] = true
+	}
+
+	// Add any new peers we just discovered
+	for _, discoveredPeer := range discoveredPeers {
+		if !existingPeers[discoveredPeer] {
+			log.Printf("Gossip: Discovered new peer: %s", discoveredPeer)
+			hub.config.Peers = append(hub.config.Peers, discoveredPeer)
+			existingPeers[discoveredPeer] = true // Add to map to avoid duplicates in this run
+		}
+	}
+}
+
 func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *ChatHub, dataManager *DataStreamManager) {
 	statusSvc := NewStatusService(chatHub, listenAddr)
 	webfingerHandler := &WebFingerHandler{Cfg: cfg, NickDB: nickDB}
@@ -170,6 +221,7 @@ func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *Ch
 	s2sRouter.HandleFunc("/search", s2sHandler.Search).Methods("GET")
 	s2sRouter.HandleFunc("/transfers", s2sHandler.InitiateTransfer).Methods("POST")
 	s2sRouter.HandleFunc("/data/{tid}/{idx}", s2sHandler.RelayData).Methods("POST")
+	s2sRouter.HandleFunc("/peers", s2sHandler.Peers).Methods("GET")
 
 	log.Printf("HTTP services (Status, WebFinger, S2S) listening at http://%s/", listenAddr)
 	if err := http.ListenAndServe(listenAddr, router); err != nil {
@@ -200,6 +252,8 @@ func main() {
 	s2sClient := NewS2SClient(cfg.SharedSecret)
 	chatHub := NewChatHub(fileRegistry, cfg, s2sClient)
 	dataManager := NewDataStreamManager()
+
+	go startGossipProtocol(chatHub)
 
 	httpAddr := cfg.HttpListenAddr
 	if httpAddr == "" {
@@ -326,7 +380,6 @@ func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, ni
 			if val, ok := chatHub.federatedTransfers.Load(transferID); ok {
 				state := val.(*federatedTransferState)
 
-				// --- START FIX ---
 				// Find the full peer address (host:port) from the config for the target domain.
 				targetPeerAddress := state.targetDomain // Default
 				for _, p := range chatHub.config.Peers {
@@ -335,7 +388,6 @@ func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, ni
 						break
 					}
 				}
-				// --- END FIX ---
 
 				log.Printf("Forwarding federated upload stream %s to %s", streamKey, targetPeerAddress)
 				go func() {
