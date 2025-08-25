@@ -184,20 +184,27 @@ func gossip(hub *ChatHub) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
 
+	// --- START FIX ---
+	// Determine this server's own public-facing address to avoid adding itself.
+	// Note: This assumes HttpListenAddr is in the format ":port" or "ip:port".
+	listenPort := strings.Split(hub.config.HttpListenAddr, ":")[1]
+	selfAddress := fmt.Sprintf("%s:%s", hub.config.Domain, listenPort)
+
 	// Create a map for quick lookups of existing peers
 	existingPeers := make(map[string]bool)
 	for _, p := range hub.config.Peers {
 		existingPeers[p] = true
 	}
 
-	// Add any new peers we just discovered
+	// Add any new peers we just discovered, skipping ourselves
 	for _, discoveredPeer := range discoveredPeers {
-		if !existingPeers[discoveredPeer] {
+		if discoveredPeer != selfAddress && !existingPeers[discoveredPeer] {
 			log.Printf("Gossip: Discovered new peer: %s", discoveredPeer)
 			hub.config.Peers = append(hub.config.Peers, discoveredPeer)
 			existingPeers[discoveredPeer] = true // Add to map to avoid duplicates in this run
 		}
 	}
+	// --- END FIX ---
 }
 
 func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *ChatHub, dataManager *DataStreamManager) {
