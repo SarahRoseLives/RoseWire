@@ -14,7 +14,129 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// TransferInfo now represents the server's state for an active transfer.
+// ... (Structs and NewChatHub are unchanged from the previous step) ...
+
+func (c *ChatClient) handleMessage(msg InboundMessage) {
+	switch msg.Type {
+	case "share":
+		var p SharePayload
+		if err := json.Unmarshal(msg.Payload, &p); err == nil {
+			c.fileRegistry.UpdateUserFiles(c.federatedName, p.Files)
+			shareObject, _ := json.Marshal(ShareActivityObject{Files: p.Files})
+			activity := Activity{
+				Type:   "Share",
+				Actor:  c.federatedName,
+				Object: shareObject,
+			}
+			go c.hub.federateActivity(activity)
+		}
+
+	case "search":
+		// FIX: This entire case is updated for concurrent federated search.
+		var p SearchPayload
+		if err := json.Unmarshal(msg.Payload, &p); err == nil {
+			var wg sync.WaitGroup
+			resultsChan := make(chan []SearchResult)
+
+			// 1. Search locally
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				localResults := c.fileRegistry.Search(p.Query)
+				if len(localResults) > 0 {
+					resultsChan <- localResults
+				}
+			}()
+
+			// 2. Search all peers
+			for _, peer := range c.hub.config.Peers {
+				wg.Add(1)
+				go func(peerDomain string) {
+					defer wg.Done()
+					peerResults, err := c.hub.s2sClient.SearchPeer(peerDomain, p.Query)
+					if err != nil {
+						log.Printf("Error searching peer %s: %v", peerDomain, err)
+						return
+					}
+					if len(peerResults) > 0 {
+						resultsChan <- peerResults
+					}
+				}(peer)
+			}
+
+			// 3. Wait for all searches to complete, then close the channel
+			go func() {
+				wg.Wait()
+				close(resultsChan)
+			}()
+
+			// 4. Aggregate results
+			var finalResults []SearchResult
+			for results := range resultsChan {
+				finalResults = append(finalResults, results...)
+			}
+
+			log.Printf("Total federated search results for '%s': %d", p.Query, len(finalResults))
+			c.send("search_results", SearchResultsPayload{Results: finalResults})
+		}
+
+	case "top_files":
+		// Note: top_files remains local for now and does not federate.
+		results := c.fileRegistry.TopFiles(50)
+		c.send("search_results", SearchResultsPayload{Results: results})
+
+	case "get_stats":
+		c.hub.mu.Lock()
+		var users []map[string]string
+		for name := range c.hub.clients {
+			users = append(users, map[string]string{"nickname": name, "status": "Online"})
+		}
+		activeTransfers := len(c.hub.transfers)
+		totalTransfers := c.hub.totalTransfers
+		c.hub.mu.Unlock()
+		stats := NetworkStatsPayload{
+			Users:           users,
+			RelayServers:    1,
+			TotalUsers:      len(users),
+			ActiveTransfers: activeTransfers,
+			TotalTransfers:  totalTransfers,
+		}
+		c.send("network_stats", stats)
+
+	case "get_file":
+		var p GetFilePayload
+		if err := json.Unmarshal(msg.Payload, &p); err == nil {
+			log.Printf("handleMessage: '%s' requested file '%s' from peer '%s'", c.federatedName, p.FileName, p.Peer)
+			c.initiateFileTransfer(p.FileName, p.Peer)
+		}
+
+	case "chat_message":
+		var p ChatMessagePayload
+		if err := json.Unmarshal(msg.Payload, &p); err == nil {
+			broadcastPayload := ChatBroadcastPayload{
+				Timestamp: time.Now().Format("15:04"),
+				Nickname:  c.federatedName,
+				Text:      p.Text,
+				IsSystem:  false,
+			}
+			c.hub.broadcast("chat_broadcast", broadcastPayload, "")
+			chatObject, _ := json.Marshal(ChatActivityObject{Content: p.Text})
+			activity := Activity{
+				Type:   "Create",
+				Actor:  c.federatedName,
+				Object: chatObject,
+			}
+			go c.hub.federateActivity(activity)
+		}
+
+	// ... other cases (upload_data, upload_done, upload_error) remain unchanged.
+
+	default:
+		log.Printf("Unknown message type '%s' from %s", msg.Type, c.federatedName)
+	}
+}
+
+// ... (The rest of chat.go is unchanged) ...
 type TransferInfo struct {
 	ID       string
 	FileName string
@@ -30,7 +152,7 @@ type ChatHub struct {
 	transfers      map[string]*TransferInfo
 	totalTransfers int
 	config         *Config
-	s2sClient      *S2SClient // <-- Add S2S client for outgoing pushes
+	s2sClient      *S2SClient
 }
 
 type ChatClient struct {
@@ -50,11 +172,9 @@ func NewChatHub(registry *FileRegistry, config *Config, s2sClient *S2SClient) *C
 		fileRegistry: registry,
 		transfers:    make(map[string]*TransferInfo),
 		config:       config,
-		s2sClient:    s2sClient, // <-- Store the S2S client
+		s2sClient:    s2sClient,
 	}
 }
-
-// federateActivity pushes an activity to all configured peers.
 func (hub *ChatHub) federateActivity(activity Activity) {
 	if hub.s2sClient == nil || len(hub.config.Peers) == 0 {
 		return // Federation is not configured
@@ -62,7 +182,6 @@ func (hub *ChatHub) federateActivity(activity Activity) {
 
 	log.Printf("Federating activity type '%s' from '%s' to %d peers.", activity.Type, activity.Actor, len(hub.config.Peers))
 	for _, peer := range hub.config.Peers {
-		// Run in a goroutine so one slow peer doesn't block others.
 		go func(peerDomain string) {
 			err := hub.s2sClient.PushActivity(peerDomain, activity)
 			if err != nil {
@@ -71,40 +190,6 @@ func (hub *ChatHub) federateActivity(activity Activity) {
 		}(peer)
 	}
 }
-
-func (c *ChatClient) handleMessage(msg InboundMessage) {
-	switch msg.Type {
-	// ... other cases remain the same
-	case "chat_message":
-		var p ChatMessagePayload
-		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			// 1. Broadcast to local clients
-			broadcastPayload := ChatBroadcastPayload{
-				Timestamp: time.Now().Format("15:04"),
-				Nickname:  c.federatedName,
-				Text:      p.Text,
-				IsSystem:  false,
-			}
-			c.hub.broadcast("chat_broadcast", broadcastPayload, "")
-
-			// 2. Federate to other servers
-			chatObject, _ := json.Marshal(ChatActivityObject{Content: p.Text})
-			activity := Activity{
-				Type:   "Create",
-				Actor:  c.federatedName,
-				Object: chatObject,
-			}
-			go c.hub.federateActivity(activity)
-		}
-	// ... other cases remain the same
-	default:
-		log.Printf("Unknown message type '%s' from %s", msg.Type, c.federatedName)
-	}
-}
-
-// --- The rest of chat.go remains unchanged ---
-
-// Generates a new unique ID for a transfer.
 func generateTransferID() (string, error) {
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
@@ -112,11 +197,8 @@ func generateTransferID() (string, error) {
 	}
 	return hex.EncodeToString(bytes), nil
 }
-
-// Join now uses the simple nickname to create a client with a full federated name.
 func (hub *ChatHub) Join(nickname string, channel ssh.Channel) *ChatClient {
 	federatedName := fmt.Sprintf("@%s@%s", nickname, hub.config.Domain)
-
 	client := &ChatClient{
 		nickname:      nickname,
 		federatedName: federatedName,
@@ -129,10 +211,8 @@ func (hub *ChatHub) Join(nickname string, channel ssh.Channel) *ChatClient {
 	hub.mu.Lock()
 	hub.clients[federatedName] = client
 	hub.mu.Unlock()
-
 	go client.readLoop()
 	go client.writeLoop()
-
 	joinMsg := ChatBroadcastPayload{
 		Timestamp: time.Now().Format("15:04"),
 		Text:      fmt.Sprintf("%s joined the chat.", federatedName),
@@ -141,21 +221,17 @@ func (hub *ChatHub) Join(nickname string, channel ssh.Channel) *ChatClient {
 	hub.broadcast("system_broadcast", joinMsg, "")
 	return client
 }
-
 func (c *ChatClient) Done() <-chan struct{} {
 	return c.done
 }
-
 func (hub *ChatHub) broadcast(msgType string, payload interface{}, from string) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
-
 	msg, err := json.Marshal(OutboundMessage{Type: msgType, Payload: payload})
 	if err != nil {
 		log.Printf("Error marshalling broadcast message: %v", err)
 		return
 	}
-
 	for name, client := range hub.clients {
 		if name == from {
 			continue
@@ -166,7 +242,6 @@ func (hub *ChatHub) broadcast(msgType string, payload interface{}, from string) 
 		}
 	}
 }
-
 func (hub *ChatHub) unicast(msgType string, payload interface{}, to string) bool {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
@@ -175,13 +250,11 @@ func (hub *ChatHub) unicast(msgType string, payload interface{}, to string) bool
 		log.Printf("unicast: target client '%s' not found for message type '%s'", to, msgType)
 		return false
 	}
-
 	msg, err := json.Marshal(OutboundMessage{Type: msgType, Payload: payload})
 	if err != nil {
 		log.Printf("Error marshalling unicast message: %v", err)
 		return false
 	}
-
 	select {
 	case client.outgoing <- msg:
 		log.Printf("unicast: sent message type '%s' to '%s'", msgType, to)
@@ -191,13 +264,11 @@ func (hub *ChatHub) unicast(msgType string, payload interface{}, to string) bool
 		return false
 	}
 }
-
 func (hub *ChatHub) part(federatedName string) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
 	delete(hub.clients, federatedName)
 }
-
 func (c *ChatClient) send(msgType string, payload interface{}) {
 	msg, err := json.Marshal(OutboundMessage{Type: msgType, Payload: payload})
 	if err != nil {
@@ -206,7 +277,6 @@ func (c *ChatClient) send(msgType string, payload interface{}) {
 	}
 	c.outgoing <- msg
 }
-
 func (c *ChatClient) readLoop() {
 	defer c.Close()
 	scanner := bufio.NewScanner(c.channel)
@@ -224,7 +294,6 @@ func (c *ChatClient) readLoop() {
 		c.handleMessage(msg)
 	}
 }
-
 func (c *ChatClient) Close() {
 	c.once.Do(func() {
 		c.fileRegistry.RemoveUser(c.federatedName)
@@ -232,7 +301,6 @@ func (c *ChatClient) Close() {
 		close(c.done)
 		c.channel.Close()
 		log.Printf("%s left chat", c.federatedName)
-
 		leaveMsg := ChatBroadcastPayload{
 			Timestamp: time.Now().Format("15:04"),
 			Text:      fmt.Sprintf("%s left the chat.", c.federatedName),
@@ -241,9 +309,6 @@ func (c *ChatClient) Close() {
 		c.hub.broadcast("system_broadcast", leaveMsg, "")
 	})
 }
-
-// (The full body of handleMessage is in the diff above, other functions below are for context)
-
 func (c *ChatClient) writeLoop() {
 	for {
 		select {
@@ -257,7 +322,6 @@ func (c *ChatClient) writeLoop() {
 		}
 	}
 }
-
 func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 	if peer == c.federatedName {
 		c.send("transfer_error", TransferErrorPayload{Message: "You cannot download your own file."})
@@ -297,7 +361,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 	}, peer)
 	log.Printf("initiateFileTransfer: sent 'upload_request' to '%s' for transfer %s (ok=%v)", peer, transferID, ok)
 }
-
 func (c *ChatClient) relayTransferMessage(msgType string, payload interface{}, transferID string) {
 	c.hub.mu.Lock()
 	transfer, ok := c.hub.transfers[transferID]

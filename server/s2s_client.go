@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -27,7 +29,6 @@ func NewS2SClient(secret string) *S2SClient {
 
 // PushActivity sends an activity to a peer's inbox.
 func (c *S2SClient) PushActivity(peerDomain string, activity Activity) error {
-	// For local testing, we use http. In production, this should be https.
 	url := fmt.Sprintf("http://%s/api/s2s/inbox", peerDomain)
 
 	body, err := json.Marshal(activity)
@@ -58,4 +59,36 @@ func (c *S2SClient) PushActivity(peerDomain string, activity Activity) error {
 
 	log.Printf("Successfully pushed activity of type '%s' to peer %s", activity.Type, peerDomain)
 	return nil
+}
+
+// NEW: Add a method to search a peer for files.
+func (c *S2SClient) SearchPeer(peerDomain string, query string) ([]SearchResult, error) {
+	// URL-encode the query to handle special characters safely.
+	encodedQuery := url.QueryEscape(query)
+	url := fmt.Sprintf("http://%s/api/s2s/search?query=%s", peerDomain, encodedQuery)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create search request: %w", err)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send search request to %s: %w", peerDomain, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("S2S Search to %s failed with status %s: %s", peerDomain, resp.Status, string(bodyBytes))
+		return nil, fmt.Errorf("peer server returned non-200 status: %s", resp.Status)
+	}
+
+	var results []SearchResult
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return nil, fmt.Errorf("failed to decode search results from %s: %w", peerDomain, err)
+	}
+
+	log.Printf("S2S Search: Received %d results from peer %s for query '%s'", len(results), peerDomain, query)
+	return results, nil
 }

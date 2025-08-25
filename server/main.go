@@ -18,15 +18,112 @@ import (
 )
 
 const (
-	hostKeyFile = "server_ed25519"
-	nickDBFile  = "nicks.db"
-	configFile  = "config.json"
-	// Default listen addresses are used if not specified in the config.
+	hostKeyFile           = "server_ed25519"
+	nickDBFile            = "nicks.db"
+	configFile            = "config.json"
 	defaultSshListenAddr  = "0.0.0.0:2222"
 	defaultHttpListenAddr = "0.0.0.0:8080"
 )
 
-// DataStreamManager remains the same...
+// ... (DataStreamManager, NickDB structs are unchanged) ...
+
+func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *ChatHub) {
+	statusSvc := NewStatusService(chatHub, listenAddr)
+	webfingerHandler := &WebFingerHandler{Cfg: cfg, NickDB: nickDB}
+	s2sHandler := NewS2SHandler(cfg, chatHub)
+
+	mux := http.NewServeMux()
+
+	mux.Handle("/", statusSvc)
+	mux.Handle("/api/status", statusSvc)
+	mux.Handle("/.well-known/webfinger", webfingerHandler)
+
+	s2sRouter := http.NewServeMux()
+	s2sRouter.HandleFunc("/api/s2s/inbox", s2sHandler.Inbox)
+	// FIX: Register the new S2S search handler.
+	s2sRouter.HandleFunc("/api/s2s/search", s2sHandler.Search)
+	mux.Handle("/api/s2s/", s2sHandler.authMiddleware(s2sRouter))
+
+	log.Printf("HTTP services (Status, WebFinger, S2S) listening at http://%s/", listenAddr)
+	if err := http.ListenAndServe(listenAddr, mux); err != nil {
+		log.Fatalf("Failed to start HTTP server: %v", err)
+	}
+}
+
+// ... (The rest of main.go is unchanged) ...
+func main() {
+	fmt.Printf("Starting RoseWire server...\n")
+
+	cfg, err := LoadConfig(configFile)
+	if err != nil {
+		log.Fatalf("Failed to load %s: %v. Please create it.", configFile, err)
+	}
+	log.Printf("Server domain configured as: %s", cfg.Domain)
+
+	hostSigner, err := ensureHostKey(hostKeyFile)
+	if err != nil {
+		log.Fatalf("Failed to load host key: %v", err)
+	}
+
+	nickDB, err := LoadNickDB(nickDBFile)
+	if err != nil {
+		log.Fatalf("Failed to load nick DB: %v", err)
+	}
+
+	fileRegistry := NewFileRegistry()
+	s2sClient := NewS2SClient(cfg.SharedSecret)
+	chatHub := NewChatHub(fileRegistry, cfg, s2sClient)
+	dataManager := NewDataStreamManager()
+
+	httpAddr := cfg.HttpListenAddr
+	if httpAddr == "" {
+		httpAddr = defaultHttpListenAddr
+	}
+	go startHttpServer(httpAddr, cfg, nickDB, chatHub)
+
+	sshAddr := cfg.SshListenAddr
+	if sshAddr == "" {
+		sshAddr = defaultSshListenAddr
+	}
+
+	sshConfig := &ssh.ServerConfig{
+		PublicKeyCallback: func(meta ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
+			nick := meta.User()
+			if nick == "" || strings.Contains(nick, "@") {
+				return nil, fmt.Errorf("invalid nickname format; must not be empty or contain '@'")
+			}
+			err := nickDB.Register(nick, pubKey)
+			if err != nil {
+				return nil, err
+			}
+			if err := nickDB.Save(nickDBFile); err != nil {
+				log.Printf("Error saving nick DB: %v", err)
+			}
+			return &ssh.Permissions{
+				Extensions: map[string]string{
+					"nickname": nick,
+				},
+			}, nil
+		},
+	}
+	sshConfig.AddHostKey(hostSigner)
+
+	listener, err := net.Listen("tcp", sshAddr)
+	if err != nil {
+		log.Fatalf("Failed to listen for SSH on %s: %v", sshAddr, err)
+	}
+	defer listener.Close()
+	log.Printf("SSH server listening on %s", sshAddr)
+
+	for {
+		nConn, err := listener.Accept()
+		if err != nil {
+			log.Printf("Failed to accept connection: %v", err)
+			continue
+		}
+		go handleConn(nConn, sshConfig, chatHub, dataManager)
+	}
+}
 type DataStreamManager struct {
 	mu      sync.Mutex
 	pending map[string]ssh.Channel
@@ -79,7 +176,6 @@ func (dsm *DataStreamManager) Pair(key string, newChan ssh.Channel) {
 	}()
 }
 
-// NickDB remains the same...
 type NickDB struct {
 	sync.Mutex
 	NickToKey map[string]string
@@ -140,104 +236,6 @@ func ensureHostKey(path string) (ssh.Signer, error) {
 	}
 	return ssh.ParsePrivateKey(keyBytes)
 }
-
-func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *ChatHub) {
-	statusSvc := NewStatusService(chatHub, listenAddr)
-	webfingerHandler := &WebFingerHandler{Cfg: cfg, NickDB: nickDB}
-	s2sHandler := NewS2SHandler(cfg, chatHub)
-
-	mux := http.NewServeMux()
-
-	mux.Handle("/", statusSvc)
-	mux.Handle("/api/status", statusSvc)
-	mux.Handle("/.well-known/webfinger", webfingerHandler)
-
-	s2sRouter := http.NewServeMux()
-	s2sRouter.HandleFunc("/api/s2s/inbox", s2sHandler.Inbox)
-	mux.Handle("/api/s2s/", s2sHandler.authMiddleware(s2sRouter))
-
-	log.Printf("HTTP services (Status, WebFinger, S2S) listening at http://%s/", listenAddr)
-	if err := http.ListenAndServe(listenAddr, mux); err != nil {
-		log.Fatalf("Failed to start HTTP server: %v", err)
-	}
-}
-
-func main() {
-	fmt.Printf("Starting RoseWire server...\n")
-
-	cfg, err := LoadConfig(configFile)
-	if err != nil {
-		log.Fatalf("Failed to load %s: %v. Please create it.", configFile, err)
-	}
-	log.Printf("Server domain configured as: %s", cfg.Domain)
-
-	hostSigner, err := ensureHostKey(hostKeyFile)
-	if err != nil {
-		log.Fatalf("Failed to load host key: %v", err)
-	}
-
-	nickDB, err := LoadNickDB(nickDBFile)
-	if err != nil {
-		log.Fatalf("Failed to load nick DB: %v", err)
-	}
-
-	fileRegistry := NewFileRegistry()
-	s2sClient := NewS2SClient(cfg.SharedSecret)
-	chatHub := NewChatHub(fileRegistry, cfg, s2sClient)
-	dataManager := NewDataStreamManager()
-
-	// Use listen addresses from config, or defaults if not provided.
-	httpAddr := cfg.HttpListenAddr
-	if httpAddr == "" {
-		httpAddr = defaultHttpListenAddr
-	}
-	go startHttpServer(httpAddr, cfg, nickDB, chatHub)
-
-	sshAddr := cfg.SshListenAddr
-	if sshAddr == "" {
-		sshAddr = defaultSshListenAddr
-	}
-
-	sshConfig := &ssh.ServerConfig{
-		PublicKeyCallback: func(meta ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
-			nick := meta.User()
-			if nick == "" || strings.Contains(nick, "@") {
-				return nil, fmt.Errorf("invalid nickname format; must not be empty or contain '@'")
-			}
-			err := nickDB.Register(nick, pubKey)
-			if err != nil {
-				return nil, err
-			}
-			if err := nickDB.Save(nickDBFile); err != nil {
-				log.Printf("Error saving nick DB: %v", err)
-			}
-			return &ssh.Permissions{
-				Extensions: map[string]string{
-					"nickname": nick,
-				},
-			}, nil
-		},
-	}
-	sshConfig.AddHostKey(hostSigner)
-
-	// FIX: Use the configured or default SSH address.
-	listener, err := net.Listen("tcp", sshAddr)
-	if err != nil {
-		log.Fatalf("Failed to listen for SSH on %s: %v", sshAddr, err)
-	}
-	defer listener.Close()
-	log.Printf("SSH server listening on %s", sshAddr)
-
-	for {
-		nConn, err := listener.Accept()
-		if err != nil {
-			log.Printf("Failed to accept connection: %v", err)
-			continue
-		}
-		go handleConn(nConn, sshConfig, chatHub, dataManager)
-	}
-}
-
 func handleConn(nConn net.Conn, config *ssh.ServerConfig, chatHub *ChatHub, dataManager *DataStreamManager) {
 	defer nConn.Close()
 	sshConn, chans, reqs, err := ssh.NewServerConn(nConn, config)

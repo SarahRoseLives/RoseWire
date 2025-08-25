@@ -33,7 +33,6 @@ type ChatMessagePayload struct {
 	Text string `json:"text"`
 }
 
-// FIX: This struct was accidentally removed and is now restored.
 type UploadDataPayload struct {
 	TransferID string `json:"transferID"`
 	Data       string `json:"data"` // base64 encoded
@@ -98,4 +97,9 @@ type Activity struct {
 // ChatActivityObject is the content of a chat message activity.
 type ChatActivityObject struct {
 	Content string `json:"content"`
+}
+
+// FIX: Add the object for a file sharing activity.
+type ShareActivityObject struct {
+	Files []SharedFile `json:"files"`
 }
