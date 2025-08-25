@@ -101,11 +101,17 @@ type ShareActivityObject struct {
 	Files []SharedFile `json:"files"`
 }
 
-// S2STransferRequest now includes the domain of the server requesting the file.
 type S2STransferRequest struct {
 	TransferID          string `json:"transferID"`
 	FileName            string `json:"fileName"`
 	FileOwner           string `json:"fileOwner"`           // The full federated name of the user who has the file
 	RequesterPeer       string `json:"requesterPeer"`       // The full federated name of the user who wants the file
 	RequesterPeerDomain string `json:"requesterPeerDomain"` // The domain of the server making the request (e.g., "instance-a.com")
+}
+
+// InstanceActor defines the JSON object served at the /actor endpoint.
+type InstanceActor struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	PublicKey string `json:"publicKey"` // PEM-encoded public key
 }

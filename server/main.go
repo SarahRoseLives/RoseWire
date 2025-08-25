@@ -2,12 +2,18 @@ package main
 
 import (
 	"bufio"
+	"crypto"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
+	mrand "math/rand" // Use a named import 'mrand' to avoid collision with 'crypto/rand'
 	"net"
 	"net/http"
 	"os"
@@ -21,6 +27,7 @@ import (
 
 const (
 	hostKeyFile           = "server_ed25519"
+	instanceKeyFile       = "instance_key.pem"
 	nickDBFile            = "nicks.db"
 	configFile            = "config.json"
 	defaultSshListenAddr  = "0.0.0.0:2222"
@@ -78,8 +85,6 @@ func (dsm *DataStreamManager) Pair(key string, newChan ssh.Channel) {
 		dsm.mu.Unlock()
 	}()
 }
-
-// GetAndRemovePending retrieves a waiting channel for a given key, removing it from the map.
 func (dsm *DataStreamManager) GetAndRemovePending(key string) (ssh.Channel, bool) {
 	dsm.mu.Lock()
 	defer dsm.mu.Unlock()
@@ -149,13 +154,46 @@ func ensureHostKey(path string) (ssh.Signer, error) {
 	}
 	return ssh.ParsePrivateKey(keyBytes)
 }
+func ensureInstanceKey(path string) (crypto.Signer, error) {
+	keyBytes, err := os.ReadFile(path)
+	if err == nil {
+		block, _ := pem.Decode(keyBytes)
+		if block == nil {
+			return nil, fmt.Errorf("failed to parse PEM block containing the private key")
+		}
+		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse private key: %w", err)
+		}
+		return key.(crypto.Signer), nil
+	}
 
-// startGossipProtocol runs a loop in the background to discover new peers.
+	log.Printf("Instance key %s not found, generating a new one...", path)
+	_, privKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+
+	privBytes, err := x509.MarshalPKCS8PrivateKey(privKey)
+	if err != nil {
+		return nil, err
+	}
+
+	pemBlock := &pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: privBytes,
+	}
+
+	if err := os.WriteFile(path, pem.EncodeToMemory(pemBlock), 0600); err != nil {
+		return nil, fmt.Errorf("failed to write new instance key: %w", err)
+	}
+
+	return privKey, nil
+}
+
 func startGossipProtocol(hub *ChatHub) {
 	log.Println("Gossip protocol starting...")
-	// Ticker will fire every 5 minutes.
 	ticker := time.NewTicker(5 * time.Minute)
-	// Run once immediately at startup.
 	go gossip(hub)
 
 	for range ticker.C {
@@ -170,8 +208,8 @@ func gossip(hub *ChatHub) {
 		log.Println("Gossip: No peers to gossip with.")
 		return
 	}
-	// Select a random peer to talk to
-	targetPeer := hub.config.Peers[rand.Intn(len(hub.config.Peers))]
+	// Use the aliased 'mrand' to select a random peer
+	targetPeer := hub.config.Peers[mrand.Intn(len(hub.config.Peers))]
 	hub.mu.Unlock()
 
 	log.Printf("Gossip: Gossiping with peer %s", targetPeer)
@@ -184,46 +222,55 @@ func gossip(hub *ChatHub) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
 
-	// --- START FIX ---
-	// Determine this server's own public-facing address to avoid adding itself.
-	// Note: This assumes HttpListenAddr is in the format ":port" or "ip:port".
 	listenPort := strings.Split(hub.config.HttpListenAddr, ":")[1]
 	selfAddress := fmt.Sprintf("%s:%s", hub.config.Domain, listenPort)
 
-	// Create a map for quick lookups of existing peers
 	existingPeers := make(map[string]bool)
 	for _, p := range hub.config.Peers {
 		existingPeers[p] = true
 	}
 
-	// Add any new peers we just discovered, skipping ourselves
 	for _, discoveredPeer := range discoveredPeers {
 		if discoveredPeer != selfAddress && !existingPeers[discoveredPeer] {
 			log.Printf("Gossip: Discovered new peer: %s", discoveredPeer)
 			hub.config.Peers = append(hub.config.Peers, discoveredPeer)
-			existingPeers[discoveredPeer] = true // Add to map to avoid duplicates in this run
+			existingPeers[discoveredPeer] = true
 		}
 	}
-	// --- END FIX ---
 }
 
-func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *ChatHub, dataManager *DataStreamManager) {
+func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *ChatHub, dataManager *DataStreamManager, instanceSigner crypto.Signer) {
 	statusSvc := NewStatusService(chatHub, listenAddr)
 	webfingerHandler := &WebFingerHandler{Cfg: cfg, NickDB: nickDB}
-	s2sHandler := NewS2SHandler(cfg, chatHub, dataManager)
+	s2sHandler := NewS2SHandler(cfg, chatHub, dataManager, chatHub.s2sClient)
 
-	// Main router
 	router := mux.NewRouter()
 
-	// Public routes
+	router.HandleFunc("/actor", func(w http.ResponseWriter, r *http.Request) {
+		pubBytes, err := x509.MarshalPKIXPublicKey(instanceSigner.Public())
+		if err != nil {
+			http.Error(w, "Failed to marshal public key", http.StatusInternalServerError)
+			return
+		}
+		pemBlock := &pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: pubBytes,
+		}
+		actor := InstanceActor{
+			ID:        fmt.Sprintf("http://%s/actor", cfg.Domain),
+			Type:      "Service",
+			PublicKey: string(pem.EncodeToMemory(pemBlock)),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(actor)
+	}).Methods("GET")
+
 	router.Handle("/", statusSvc)
 	router.Handle("/api/status", statusSvc)
 	router.Handle("/.well-known/webfinger", webfingerHandler)
 
-	// S2S subrouter with authentication middleware
 	s2sRouter := router.PathPrefix("/api/s2s").Subrouter()
 	s2sRouter.Use(s2sHandler.authMiddleware)
-
 	s2sRouter.HandleFunc("/inbox", s2sHandler.Inbox).Methods("POST")
 	s2sRouter.HandleFunc("/search", s2sHandler.Search).Methods("GET")
 	s2sRouter.HandleFunc("/transfers", s2sHandler.InitiateTransfer).Methods("POST")
@@ -237,6 +284,9 @@ func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *Ch
 }
 
 func main() {
+	// Seed the math/rand package once at startup
+	mrand.Seed(time.Now().UnixNano())
+
 	fmt.Printf("Starting RoseWire server...\n")
 
 	cfg, err := LoadConfig(configFile)
@@ -244,6 +294,11 @@ func main() {
 		log.Fatalf("Failed to load %s: %v. Please create it.", configFile, err)
 	}
 	log.Printf("Server domain configured as: %s", cfg.Domain)
+
+	instanceSigner, err := ensureInstanceKey(instanceKeyFile)
+	if err != nil {
+		log.Fatalf("Failed to load or generate instance key: %v", err)
+	}
 
 	hostSigner, err := ensureHostKey(hostKeyFile)
 	if err != nil {
@@ -256,7 +311,7 @@ func main() {
 	}
 
 	fileRegistry := NewFileRegistry()
-	s2sClient := NewS2SClient(cfg.SharedSecret)
+	s2sClient := NewS2SClient(instanceSigner, cfg.Domain)
 	chatHub := NewChatHub(fileRegistry, cfg, s2sClient)
 	dataManager := NewDataStreamManager()
 
@@ -266,7 +321,7 @@ func main() {
 	if httpAddr == "" {
 		httpAddr = defaultHttpListenAddr
 	}
-	go startHttpServer(httpAddr, cfg, nickDB, chatHub, dataManager)
+	go startHttpServer(httpAddr, cfg, nickDB, chatHub, dataManager, instanceSigner)
 
 	sshAddr := cfg.SshListenAddr
 	if sshAddr == "" {
@@ -383,12 +438,9 @@ func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, ni
 			req.Reply(true, nil)
 			streamKey := fmt.Sprintf("%s:%s", transferID, streamIndex)
 
-			// Check if this is an upload for a federated transfer
 			if val, ok := chatHub.federatedTransfers.Load(transferID); ok {
 				state := val.(*federatedTransferState)
-
-				// Find the full peer address (host:port) from the config for the target domain.
-				targetPeerAddress := state.targetDomain // Default
+				targetPeerAddress := state.targetDomain
 				for _, p := range chatHub.config.Peers {
 					if strings.HasPrefix(p, state.targetDomain) {
 						targetPeerAddress = p
@@ -398,7 +450,6 @@ func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, ni
 
 				log.Printf("Forwarding federated upload stream %s to %s", streamKey, targetPeerAddress)
 				go func() {
-					// Use the full address with the port
 					err := s2sClient.RelayStream(targetPeerAddress, transferID, streamIndex, channel)
 					if err != nil {
 						log.Printf("Error relaying stream %s: %v", streamKey, err)
@@ -406,7 +457,6 @@ func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, ni
 					channel.Close()
 				}()
 			} else {
-				// Otherwise, it's a local transfer, pair it up.
 				dataManager.Pair(streamKey, channel)
 			}
 			return

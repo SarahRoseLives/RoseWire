@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,35 +21,90 @@ type S2SHandler struct {
 	Cfg         *Config
 	Hub         *ChatHub
 	DataManager *DataStreamManager
+	S2SClient   *S2SClient // Added for fetching peer keys
 }
 
-func NewS2SHandler(cfg *Config, hub *ChatHub, dataManager *DataStreamManager) *S2SHandler {
+func NewS2SHandler(cfg *Config, hub *ChatHub, dataManager *DataStreamManager, s2sClient *S2SClient) *S2SHandler {
 	return &S2SHandler{
 		Cfg:         cfg,
 		Hub:         hub,
 		DataManager: dataManager,
+		S2SClient:   s2sClient,
 	}
 }
 
 func (h *S2SHandler) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// GET requests (like search) don't need auth
+		// GET requests (like search and peers) don't need auth
 		if r.Method == "GET" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if h.Cfg.SharedSecret == "" {
-			log.Printf("SECURITY WARNING: S2S endpoint accessed but no shared_secret is configured.")
-			http.Error(w, "Endpoint not configured", http.StatusServiceUnavailable)
+
+		// For streaming data, we only check the identity header for now.
+		// A more advanced implementation would use chunked signing.
+		if strings.HasPrefix(r.URL.Path, "/api/s2s/data/") {
+			if r.Header.Get("X-RoseWire-Identity") == "" {
+				http.Error(w, "Unauthorized: Missing identity header", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
 			return
 		}
-		authHeader := r.Header.Get("Authorization")
-		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if token != h.Cfg.SharedSecret {
-			log.Printf("S2S unauthorized access attempt from %s", r.RemoteAddr)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+
+		identity := r.Header.Get("X-RoseWire-Identity")
+		signatureB64 := r.Header.Get("X-RoseWire-Signature")
+
+		if identity == "" || signatureB64 == "" {
+			log.Printf("S2S unauthorized: Missing identity or signature from %s", r.RemoteAddr)
+			http.Error(w, "Unauthorized: Missing identity or signature header", http.StatusUnauthorized)
 			return
 		}
+
+		signature, err := base64.StdEncoding.DecodeString(signatureB64)
+		if err != nil {
+			log.Printf("S2S unauthorized: Invalid signature encoding from %s", r.RemoteAddr)
+			http.Error(w, "Unauthorized: Invalid signature format", http.StatusBadRequest)
+			return
+		}
+
+		// Read the body, which is required for signature verification.
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			log.Printf("S2S error: Could not read body for verification from %s: %v", r.RemoteAddr, err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		// VERY IMPORTANT: Put the body back so the actual handler can read it.
+		r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+		// Find the full peer address (host:port) to fetch the key
+		var peerAddress string
+		for _, p := range h.Cfg.Peers {
+			if strings.HasPrefix(p, identity) {
+				peerAddress = p
+				break
+			}
+		}
+		if peerAddress == "" {
+			log.Printf("S2S unauthorized: Could not find peer address for identity '%s'", identity)
+			http.Error(w, "Unauthorized: Unknown peer", http.StatusUnauthorized)
+			return
+		}
+
+		publicKey, err := h.S2SClient.getPeerPublicKey(peerAddress)
+		if err != nil {
+			log.Printf("S2S unauthorized: Could not get public key for '%s': %v", identity, err)
+			http.Error(w, "Unauthorized: Could not retrieve peer key", http.StatusUnauthorized)
+			return
+		}
+
+		if !ed25519.Verify(publicKey, body, signature) {
+			log.Printf("S2S unauthorized: Invalid signature for identity '%s'", identity)
+			http.Error(w, "Unauthorized: Invalid signature", http.StatusUnauthorized)
+			return
+		}
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -87,12 +145,10 @@ func (h *S2SHandler) InitiateTransfer(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("S2S Transfer: Received request for %s from %s. Will forward to %s", req.FileName, req.RequesterPeer, req.RequesterPeerDomain)
 
-	// Store the domain we need to forward the data back to.
 	h.Hub.federatedTransfers.Store(req.TransferID, &federatedTransferState{
 		targetDomain: req.RequesterPeerDomain,
 	})
 
-	// Tell our local client (the file owner) to start the upload process.
 	ok := h.Hub.unicast("upload_request", UploadRequestPayload{
 		TransferID: req.TransferID,
 		FileName:   req.FileName,
@@ -100,7 +156,7 @@ func (h *S2SHandler) InitiateTransfer(w http.ResponseWriter, r *http.Request) {
 
 	if !ok {
 		log.Printf("S2S Transfer: Could not find or message local user %s to start upload.", req.FileOwner)
-		h.Hub.federatedTransfers.Delete(req.TransferID) // Clean up
+		h.Hub.federatedTransfers.Delete(req.TransferID)
 		http.Error(w, "File owner is not online on this server.", http.StatusNotFound)
 		return
 	}
@@ -109,7 +165,6 @@ func (h *S2SHandler) InitiateTransfer(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// RelayData receives a proxied data stream from another server and pipes it to a local client.
 func (h *S2SHandler) RelayData(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -125,16 +180,13 @@ func (h *S2SHandler) RelayData(w http.ResponseWriter, r *http.Request) {
 	var channel ssh.Channel
 	var ok bool
 
-	// --- START FIX ---
-	// Wait for up to 10 seconds for the client's SSH channel to appear.
-	for i := 0; i < 100; i++ { // 100 * 100ms = 10 seconds
+	for i := 0; i < 100; i++ {
 		channel, ok = h.DataManager.GetAndRemovePending(streamKey)
 		if ok {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	// --- END FIX ---
 
 	if !ok {
 		log.Printf("S2S Relay Error: Timed out waiting for pending client channel for stream %s", streamKey)
@@ -144,11 +196,9 @@ func (h *S2SHandler) RelayData(w http.ResponseWriter, r *http.Request) {
 	defer channel.Close()
 	defer r.Body.Close()
 
-	// Pipe the incoming HTTP request body directly into the SSH channel.
 	bytesCopied, err := io.Copy(channel, r.Body)
 	if err != nil {
 		log.Printf("S2S Relay Error: Failed during copy for stream %s: %v", streamKey, err)
-		// Can't send HTTP error as headers are likely already sent.
 		return
 	}
 	log.Printf("S2S Relay: Finished for stream %s, copied %d bytes.", streamKey, bytesCopied)
@@ -199,10 +249,8 @@ func (h *S2SHandler) handleShareActivity(activity Activity) {
 	log.Printf("S2S: Ingested %d shared files from %s into the local registry.", len(shareObj.Files), activity.Actor)
 }
 
-// Peers is an S2S endpoint that returns the server's current list of known peers.
 func (h *S2SHandler) Peers(w http.ResponseWriter, r *http.Request) {
 	h.Hub.mu.Lock()
-	// Create a copy to avoid race conditions while encoding
 	peers := make([]string, len(h.Hub.config.Peers))
 	copy(peers, h.Hub.config.Peers)
 	h.Hub.mu.Unlock()
