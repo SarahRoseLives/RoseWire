@@ -150,10 +150,12 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 			return true
 		})
 		totalTransfers := c.hub.totalTransfers
+		relayServers := 1 + len(c.hub.config.Peers)
 		c.hub.mu.Unlock()
+
 		stats := NetworkStatsPayload{
 			Users:           users,
-			RelayServers:    1,
+			RelayServers:    relayServers,
 			TotalUsers:      len(users),
 			ActiveTransfers: activeTransfers,
 			TotalTransfers:  totalTransfers,
@@ -190,7 +192,6 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 		var p UploadDonePayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
 			log.Printf("handleMessage: got 'upload_done' from '%s' for transfer %s", c.federatedName, p.TransferID)
-			// For local transfers, relay the message. Federated transfers are handled stream-by-stream.
 			if _, isFederated := c.hub.federatedTransfers.Load(p.TransferID); !isFederated {
 				c.relayTransferMessage("upload_done", p, p.TransferID)
 				c.hub.mu.Lock()
@@ -204,7 +205,6 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 		var p UploadErrorPayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
 			log.Printf("handleMessage: got 'upload_error' from '%s' for transfer %s: %s", c.federatedName, p.TransferID, p.Message)
-			// For federated transfers, the error needs to be pushed to the other server
 			if _, isFederated := c.hub.federatedTransfers.Load(p.TransferID); isFederated {
 				// TODO: Federate transfer errors back to the requesting server.
 				c.hub.federatedTransfers.Delete(p.TransferID)
@@ -221,7 +221,6 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 	}
 }
 
-// A helper function to extract the domain from a federated name.
 func domainFromFederatedName(name string) (string, bool) {
 	parts := strings.Split(name, "@")
 	if len(parts) == 3 {
@@ -250,7 +249,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 		return
 	}
 
-	// 1. Tell the local client the transfer is starting, regardless of local or federated.
 	c.send("transfer_start", TransferStartPayload{
 		TransferID: transferID,
 		FileName:   filename,
@@ -259,27 +257,22 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 	})
 
 	if isRemote {
-		// --- FEDERATED TRANSFER ---
 		peerDomain, ok := domainFromFederatedName(peer)
 		if !ok {
 			c.send("transfer_error", TransferErrorPayload{TransferID: transferID, Message: "Invalid peer address format."})
 			return
 		}
 
-		// --- START FIX ---
-		// Find the full peer address (host:port) from the config that matches the domain.
-		fullPeerAddress := peerDomain // Default to just the domain in case it's not in the peer list for some reason
+		fullPeerAddress := peerDomain
 		for _, p := range c.hub.config.Peers {
 			if strings.HasPrefix(p, peerDomain) {
 				fullPeerAddress = p
 				break
 			}
 		}
-		// --- END FIX ---
 
 		log.Printf("Federated Transfer %s: %s requesting '%s' from %s", transferID, c.federatedName, filename, peer)
 
-		// 2. Make an S2S request to the peer's server to start the upload.
 		go func() {
 			s2sReq := S2STransferRequest{
 				TransferID:          transferID,
@@ -288,7 +281,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 				RequesterPeer:       c.federatedName,
 				RequesterPeerDomain: c.hub.config.Domain,
 			}
-			// Use the fullPeerAddress which includes the port.
 			err := c.hub.s2sClient.RequestTransfer(fullPeerAddress, s2sReq)
 			if err != nil {
 				log.Printf("Federated Transfer %s: S2S request to %s failed: %v", transferID, fullPeerAddress, err)
@@ -300,7 +292,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 		}()
 
 	} else {
-		// --- LOCAL TRANSFER (Existing logic) ---
 		transfer := &TransferInfo{
 			ID:       transferID,
 			FileName: filename,
@@ -328,6 +319,7 @@ func generateTransferID() (string, error) {
 	}
 	return hex.EncodeToString(bytes), nil
 }
+
 func (hub *ChatHub) Join(nickname string, channel ssh.Channel) *ChatClient {
 	federatedName := fmt.Sprintf("@%s@%s", nickname, hub.config.Domain)
 	client := &ChatClient{
@@ -352,9 +344,11 @@ func (hub *ChatHub) Join(nickname string, channel ssh.Channel) *ChatClient {
 	hub.broadcast("system_broadcast", joinMsg, "")
 	return client
 }
+
 func (c *ChatClient) Done() <-chan struct{} {
 	return c.done
 }
+
 func (hub *ChatHub) broadcast(msgType string, payload interface{}, from string) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
@@ -373,6 +367,7 @@ func (hub *ChatHub) broadcast(msgType string, payload interface{}, from string) 
 		}
 	}
 }
+
 func (hub *ChatHub) unicast(msgType string, payload interface{}, to string) bool {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
@@ -395,11 +390,13 @@ func (hub *ChatHub) unicast(msgType string, payload interface{}, to string) bool
 		return false
 	}
 }
+
 func (hub *ChatHub) part(federatedName string) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
 	delete(hub.clients, federatedName)
 }
+
 func (c *ChatClient) send(msgType string, payload interface{}) {
 	msg, err := json.Marshal(OutboundMessage{Type: msgType, Payload: payload})
 	if err != nil {
@@ -408,6 +405,7 @@ func (c *ChatClient) send(msgType string, payload interface{}) {
 	}
 	c.outgoing <- msg
 }
+
 func (c *ChatClient) readLoop() {
 	defer c.Close()
 	scanner := bufio.NewScanner(c.channel)
@@ -425,6 +423,7 @@ func (c *ChatClient) readLoop() {
 		c.handleMessage(msg)
 	}
 }
+
 func (c *ChatClient) Close() {
 	c.once.Do(func() {
 		c.fileRegistry.RemoveUser(c.federatedName)
@@ -440,6 +439,7 @@ func (c *ChatClient) Close() {
 		c.hub.broadcast("system_broadcast", leaveMsg, "")
 	})
 }
+
 func (c *ChatClient) writeLoop() {
 	for {
 		select {
@@ -453,12 +453,16 @@ func (c *ChatClient) writeLoop() {
 		}
 	}
 }
+
 func (c *ChatClient) relayTransferMessage(msgType string, payload interface{}, transferID string) {
 	c.hub.mu.Lock()
 	transfer, ok := c.hub.transfers[transferID]
 	c.hub.mu.Unlock()
 	if !ok {
+		// --- START FIX ---
+		// The undefined 'err' variable has been removed from this log statement.
 		log.Printf("SECURITY: Received data for unknown transfer ID '%s' from %s", transferID, c.federatedName)
+		// --- END FIX ---
 		return
 	}
 	if transfer.FromUser != c.federatedName {

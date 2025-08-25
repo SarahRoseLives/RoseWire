@@ -48,6 +48,7 @@ func (s *StatusService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	hostname, _ := os.Hostname()
 	users := []string{}
 	filesShared := 0
+
 	s.Hub.mu.Lock()
 	for nick := range s.Hub.clients {
 		users = append(users, nick)
@@ -56,7 +57,11 @@ func (s *StatusService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		filesShared += len(files)
 	}
 	transfers := len(s.Hub.transfers)
-	totalTransfers := s.Hub.totalTransfers // Add this field to ChatHub struct
+	totalTransfers := s.Hub.totalTransfers
+	// --- START FIX ---
+	// Calculate total servers: 1 (this server) + the number of known peers.
+	relayServers := 1 + len(s.Hub.config.Peers)
+	// --- END FIX ---
 	s.Hub.mu.Unlock()
 
 	status := ServerStatus{
@@ -69,7 +74,7 @@ func (s *StatusService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		FilesShared:       filesShared,
 		TransfersInFlight: transfers,
 		TotalTransfers:    totalTransfers,
-		RelayServers:      1, // if you add multi-server later you can make this dynamic
+		RelayServers:      relayServers, // Use the dynamic count here
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -80,6 +85,7 @@ func (s *StatusService) apiStatus(w http.ResponseWriter, r *http.Request) {
 	hostname, _ := os.Hostname()
 	users := []string{}
 	filesShared := 0
+
 	s.Hub.mu.Lock()
 	for nick := range s.Hub.clients {
 		users = append(users, nick)
@@ -89,6 +95,10 @@ func (s *StatusService) apiStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	transfers := len(s.Hub.transfers)
 	totalTransfers := s.Hub.totalTransfers
+	// --- START FIX ---
+	// Also calculate for the API endpoint.
+	relayServers := 1 + len(s.Hub.config.Peers)
+	// --- END FIX ---
 	s.Hub.mu.Unlock()
 
 	status := ServerStatus{
@@ -101,7 +111,7 @@ func (s *StatusService) apiStatus(w http.ResponseWriter, r *http.Request) {
 		FilesShared:       filesShared,
 		TransfersInFlight: transfers,
 		TotalTransfers:    totalTransfers,
-		RelayServers:      1,
+		RelayServers:      relayServers, // Use the dynamic count here
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -302,9 +312,7 @@ const statusPageHTML = `
     .footer {font-size: 0.9rem;}
   }
   </style>
-  <!-- Optionally add Google Fonts for Montserrat -->
   <link href="https://fonts.googleapis.com/css?family=Montserrat:400,600,700&display=swap" rel="stylesheet">
-  <!-- Optionally add Material Icons for user/transfer icons -->
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
 </head>
 <body>
