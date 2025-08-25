@@ -21,7 +21,6 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
   @override
   void initState() {
     super.initState();
-    // Subscribe to the stream of search results from the service.
     _searchSubscription = widget.chatService.searchResults.listen((results) {
       if (mounted) {
         setState(() {
@@ -31,7 +30,6 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
       }
     });
 
-    // Fetch the top files when the panel is first displayed.
     widget.chatService.fetchTopFiles();
   }
 
@@ -42,13 +40,10 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
     super.dispose();
   }
 
-  /// Triggers a file search via the chat service.
   void _performSearch() {
     final query = _searchController.text.trim();
-    // Hide keyboard
     FocusScope.of(context).unfocus();
     if (query.isEmpty) {
-        // If the search is cleared, fetch the top files again.
         setState(() {
             _isLoading = true;
             _hasSearched = false;
@@ -65,10 +60,8 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
     widget.chatService.searchFiles(query);
   }
 
-  /// Initiates a file download and shows a confirmation snackbar.
   void _downloadFile(SearchResult item) {
     widget.chatService.downloadFile(item.fileName, item.size, item.peer);
-    // Show a confirmation message to the user.
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: Colors.green[600],
@@ -94,7 +87,6 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
     );
   }
 
-  /// Builds the search input field and button.
   Widget _buildSearchBar() {
     return Padding(
       padding: const EdgeInsets.all(12.0),
@@ -129,7 +121,6 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
     );
   }
 
-  /// Builds the main content area: loading indicator, results list, or empty state message.
   Widget _buildBody() {
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
@@ -169,6 +160,7 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
             ),
             subtitle: Text(
+              // Display the full peer address for clarity in search results
               "Size: ${item.formattedSize} • From: ${item.peer}",
               style: TextStyle(color: Colors.white.withOpacity(0.7)),
             ),

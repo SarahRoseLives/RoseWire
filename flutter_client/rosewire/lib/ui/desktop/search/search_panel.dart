@@ -30,7 +30,7 @@ class _SearchPanelState extends State<SearchPanel> {
         });
       }
     });
-    // Make sure this line is deleted, not just commented out
+    widget.chatService.fetchTopFiles();
   }
 
   @override
@@ -42,7 +42,15 @@ class _SearchPanelState extends State<SearchPanel> {
 
   void _performSearch() {
     final query = _searchController.text.trim();
-    if (query.isEmpty) return;
+    if (query.isEmpty) {
+      setState(() {
+        _isLoading = true;
+        _hasSearched = false;
+        _results = [];
+      });
+      widget.chatService.fetchTopFiles();
+      return;
+    }
     setState(() {
       _isLoading = true;
       _hasSearched = true;
@@ -101,6 +109,7 @@ class _SearchPanelState extends State<SearchPanel> {
             ),
             trailing: Column(
               mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(item.peer, style: const TextStyle(color: rosePink, fontWeight: FontWeight.bold)),
                 Text("Peer", style: TextStyle(color: roseWhite.withOpacity(0.6), fontSize: 12)),

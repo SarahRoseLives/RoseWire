@@ -25,27 +25,30 @@ type TransferInfo struct {
 
 type ChatHub struct {
 	mu             sync.Mutex
-	clients        map[string]*ChatClient
+	clients        map[string]*ChatClient // Key is now the full federated name
 	fileRegistry   *FileRegistry
 	transfers      map[string]*TransferInfo // Keyed by unique transfer ID
-	totalTransfers int                      // <-- Add this field for total transfer count
+	totalTransfers int
+	config         *Config // <-- Add this to know the server's domain
 }
 
 type ChatClient struct {
-	nickname     string
-	channel      ssh.Channel
-	outgoing     chan []byte // Changed to byte slice for JSON
-	done         chan struct{}
-	hub          *ChatHub
-	fileRegistry *FileRegistry
-	once         sync.Once
+	nickname      string // The simple nickname, e.g., "user"
+	federatedName string // The full name, e.g., "@user@domain.com"
+	channel       ssh.Channel
+	outgoing      chan []byte
+	done          chan struct{}
+	hub           *ChatHub
+	fileRegistry  *FileRegistry
+	once          sync.Once
 }
 
-func NewChatHub(registry *FileRegistry) *ChatHub {
+func NewChatHub(registry *FileRegistry, config *Config) *ChatHub {
 	return &ChatHub{
 		clients:      make(map[string]*ChatClient),
 		fileRegistry: registry,
-		transfers:    make(map[string]*TransferInfo), // Initialize the new transfers map
+		transfers:    make(map[string]*TransferInfo),
+		config:       config, // <-- Store the config
 	}
 }
 
@@ -58,27 +61,31 @@ func generateTransferID() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-// Join now returns the client it creates.
+// Join now uses the simple nickname to create a client with a full federated name.
 func (hub *ChatHub) Join(nickname string, channel ssh.Channel) *ChatClient {
+	// --- FIX: Create the full federated name for the new client ---
+	federatedName := fmt.Sprintf("@%s@%s", nickname, hub.config.Domain)
+
 	client := &ChatClient{
-		nickname:     nickname,
-		channel:      channel,
-		outgoing:     make(chan []byte, 16),
-		done:         make(chan struct{}),
-		hub:          hub,
-		fileRegistry: hub.fileRegistry,
+		nickname:      nickname,
+		federatedName: federatedName, // <-- Store the full name
+		channel:       channel,
+		outgoing:      make(chan []byte, 16),
+		done:          make(chan struct{}),
+		hub:           hub,
+		fileRegistry:  hub.fileRegistry,
 	}
 	hub.mu.Lock()
-	hub.clients[nickname] = client
+	hub.clients[federatedName] = client // <-- Use the full federated name as the unique key
 	hub.mu.Unlock()
 
 	go client.readLoop()
 	go client.writeLoop()
 
-	// Broadcast join message
+	// Broadcast join message using the full federated name
 	joinMsg := ChatBroadcastPayload{
 		Timestamp: time.Now().Format("15:04"),
-		Text:      fmt.Sprintf("%s joined the chat.", nickname),
+		Text:      fmt.Sprintf("%s joined the chat.", federatedName),
 		IsSystem:  true,
 	}
 	hub.broadcast("system_broadcast", joinMsg, "")
@@ -100,8 +107,8 @@ func (hub *ChatHub) broadcast(msgType string, payload interface{}, from string) 
 		return
 	}
 
-	for nick, client := range hub.clients {
-		if nick == from {
+	for name, client := range hub.clients {
+		if name == from {
 			continue
 		}
 		select {
@@ -111,7 +118,7 @@ func (hub *ChatHub) broadcast(msgType string, payload interface{}, from string) 
 	}
 }
 
-// unicast sends a structured message to a single client.
+// unicast sends a structured message to a single client using their federated name.
 func (hub *ChatHub) unicast(msgType string, payload interface{}, to string) bool {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
@@ -137,16 +144,17 @@ func (hub *ChatHub) unicast(msgType string, payload interface{}, to string) bool
 	}
 }
 
-func (hub *ChatHub) part(nickname string) {
+// part removes a client using their federated name.
+func (hub *ChatHub) part(federatedName string) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
-	delete(hub.clients, nickname)
+	delete(hub.clients, federatedName)
 }
 
 func (c *ChatClient) send(msgType string, payload interface{}) {
 	msg, err := json.Marshal(OutboundMessage{Type: msgType, Payload: payload})
 	if err != nil {
-		log.Printf("Error marshalling message for %s: %v", c.nickname, err)
+		log.Printf("Error marshalling message for %s: %v", c.federatedName, err)
 		return
 	}
 	c.outgoing <- msg
@@ -162,10 +170,10 @@ func (c *ChatClient) readLoop() {
 			continue
 		}
 		if err := json.Unmarshal(line, &msg); err != nil {
-			log.Printf("Error unmarshalling message from %s: %v", c.nickname, err)
+			log.Printf("Error unmarshalling message from %s: %v", c.federatedName, err)
 			continue
 		}
-		log.Printf("readLoop: received message type '%s' from %s", msg.Type, c.nickname)
+		log.Printf("readLoop: received message type '%s' from %s", msg.Type, c.federatedName)
 		c.handleMessage(msg)
 	}
 }
@@ -175,7 +183,8 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 	case "share":
 		var p SharePayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			c.fileRegistry.UpdateUserFiles(c.nickname, p.Files)
+			// Share files under the user's full federated name
+			c.fileRegistry.UpdateUserFiles(c.federatedName, p.Files)
 		}
 
 	case "search":
@@ -192,8 +201,9 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 	case "get_stats":
 		c.hub.mu.Lock()
 		var users []map[string]string
-		for nick := range c.hub.clients {
-			users = append(users, map[string]string{"nickname": nick, "status": "Online"})
+		// The key 'name' is now the full federated name
+		for name := range c.hub.clients {
+			users = append(users, map[string]string{"nickname": name, "status": "Online"})
 		}
 		activeTransfers := len(c.hub.transfers)
 		totalTransfers := c.hub.totalTransfers
@@ -211,16 +221,17 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 	case "get_file":
 		var p GetFilePayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			log.Printf("handleMessage: '%s' requested file '%s' from peer '%s'", c.nickname, p.FileName, p.Peer)
+			log.Printf("handleMessage: '%s' requested file '%s' from peer '%s'", c.federatedName, p.FileName, p.Peer)
 			c.initiateFileTransfer(p.FileName, p.Peer)
 		}
 
 	case "chat_message":
 		var p ChatMessagePayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
+			// --- FIX: Send the full federated name in the payload ---
 			broadcastPayload := ChatBroadcastPayload{
 				Timestamp: time.Now().Format("15:04"),
-				Nickname:  c.nickname,
+				Nickname:  c.federatedName, // Use the full name
 				Text:      p.Text,
 				IsSystem:  false,
 			}
@@ -230,14 +241,14 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 	case "upload_data":
 		var p UploadDataPayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			log.Printf("handleMessage: got 'upload_data' from '%s' for transfer %s (data size: %d)", c.nickname, p.TransferID, len(p.Data))
+			log.Printf("handleMessage: got 'upload_data' from '%s' for transfer %s (data size: %d)", c.federatedName, p.TransferID, len(p.Data))
 			c.relayTransferMessage("upload_data", p, p.TransferID)
 		}
 
 	case "upload_done":
 		var p UploadDonePayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			log.Printf("handleMessage: got 'upload_done' from '%s' for transfer %s", c.nickname, p.TransferID)
+			log.Printf("handleMessage: got 'upload_done' from '%s' for transfer %s", c.federatedName, p.TransferID)
 			c.relayTransferMessage("upload_done", p, p.TransferID)
 			c.hub.mu.Lock()
 			delete(c.hub.transfers, p.TransferID)
@@ -248,7 +259,7 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 	case "upload_error":
 		var p UploadErrorPayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			log.Printf("handleMessage: got 'upload_error' from '%s' for transfer %s: %s", c.nickname, p.TransferID, p.Message)
+			log.Printf("handleMessage: got 'upload_error' from '%s' for transfer %s: %s", c.federatedName, p.TransferID, p.Message)
 			c.relayTransferMessage("transfer_error", TransferErrorPayload(p), p.TransferID)
 			c.hub.mu.Lock()
 			delete(c.hub.transfers, p.TransferID)
@@ -256,12 +267,12 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 		}
 
 	default:
-		log.Printf("Unknown message type '%s' from %s", msg.Type, c.nickname)
+		log.Printf("Unknown message type '%s' from %s", msg.Type, c.federatedName)
 	}
 }
 
 func (c *ChatClient) initiateFileTransfer(filename, peer string) {
-	if peer == c.nickname {
+	if peer == c.federatedName {
 		c.send("transfer_error", TransferErrorPayload{Message: "You cannot download your own file."})
 		return
 	}
@@ -278,21 +289,21 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 		c.send("transfer_error", TransferErrorPayload{Message: "Server error creating transfer."})
 		return
 	}
-
+	// --- FIX: Use full federated names for transfer info ---
 	transfer := &TransferInfo{
 		ID:       transferID,
 		FileName: filename,
 		Size:     fileInfo.Size,
-		FromUser: peer,
-		ToUser:   c.nickname,
+		FromUser: peer,            // 'peer' is already the full federated name
+		ToUser:   c.federatedName, // The requester's full name
 	}
 	c.hub.mu.Lock()
 	c.hub.transfers[transferID] = transfer
 	c.hub.mu.Unlock()
 
-	log.Printf("Transfer %s initiated: %s wants '%s' from %s", transferID, c.nickname, filename, peer)
+	log.Printf("Transfer %s initiated: %s wants '%s' from %s", transferID, c.federatedName, filename, peer)
 
-	// Tell the downloader the transfer is starting
+	// Tell the downloader the transfer is starting, using the full 'FromUser' name
 	c.send("transfer_start", TransferStartPayload{
 		TransferID: transferID,
 		FileName:   filename,
@@ -314,23 +325,23 @@ func (c *ChatClient) relayTransferMessage(msgType string, payload interface{}, t
 	c.hub.mu.Unlock()
 
 	if !ok {
-		log.Printf("SECURITY: Received data for unknown transfer ID '%s' from %s", transferID, c.nickname)
+		log.Printf("SECURITY: Received data for unknown transfer ID '%s' from %s", transferID, c.federatedName)
 		return
 	}
-	if transfer.FromUser != c.nickname {
-		log.Printf("SECURITY: Mismatched user for transfer ID '%s'. Expected %s, got %s", transferID, transfer.FromUser, c.nickname)
+	// --- FIX: Check against the full federated name ---
+	if transfer.FromUser != c.federatedName {
+		log.Printf("SECURITY: Mismatched user for transfer ID '%s'. Expected %s, got %s", transferID, transfer.FromUser, c.federatedName)
 		return
 	}
 
 	okSend := c.hub.unicast(msgType, payload, transfer.ToUser)
-	log.Printf("relayTransferMessage: relayed '%s' for transfer %s from '%s' to '%s' (ok=%v)", msgType, transferID, c.nickname, transfer.ToUser, okSend)
+	log.Printf("relayTransferMessage: relayed '%s' for transfer %s from '%s' to '%s' (ok=%v)", msgType, transferID, c.federatedName, transfer.ToUser, okSend)
 }
 
 func (c *ChatClient) writeLoop() {
 	for {
 		select {
 		case msg := <-c.outgoing:
-			// Ensure message ends with a newline for the client scanner
 			if !strings.HasSuffix(string(msg), "\n") {
 				msg = append(msg, '\n')
 			}
@@ -343,15 +354,16 @@ func (c *ChatClient) writeLoop() {
 
 func (c *ChatClient) Close() {
 	c.once.Do(func() {
-		c.fileRegistry.RemoveUser(c.nickname)
-		c.hub.part(c.nickname)
+		// --- FIX: Use full federated name for all cleanup operations ---
+		c.fileRegistry.RemoveUser(c.federatedName)
+		c.hub.part(c.federatedName)
 		close(c.done)
 		c.channel.Close()
-		log.Printf("%s left chat", c.nickname)
+		log.Printf("%s left chat", c.federatedName)
 
 		leaveMsg := ChatBroadcastPayload{
 			Timestamp: time.Now().Format("15:04"),
-			Text:      fmt.Sprintf("%s left the chat.", c.nickname),
+			Text:      fmt.Sprintf("%s left the chat.", c.federatedName),
 			IsSystem:  true,
 		}
 		c.hub.broadcast("system_broadcast", leaveMsg, "")

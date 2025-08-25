@@ -5,7 +5,15 @@ import '../../../services/ssh_chat_service.dart';
 class ChatPanelMobile extends StatefulWidget {
   final SshChatService chatService;
   final String nickname;
-  const ChatPanelMobile({super.key, required this.chatService, required this.nickname});
+  // The full address of the currently logged-in user (e.g., @user@instance.com)
+  final String currentUserAddress;
+
+  const ChatPanelMobile({
+    super.key,
+    required this.chatService,
+    required this.nickname,
+    required this.currentUserAddress,
+  });
 
   @override
   State<ChatPanelMobile> createState() => _ChatPanelMobileState();
@@ -16,11 +24,15 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
   final ScrollController _scrollController = ScrollController();
   final List<_ChatMessage> _messages = [];
   StreamSubscription? _messageSubscription;
+  late final String _currentUserInstance;
 
   @override
   void initState() {
     super.initState();
-    // Subscribe to the message stream from the service
+    // Safely extract the instance domain from the current user's address
+    final parts = widget.currentUserAddress.split('@');
+    _currentUserInstance = parts.length > 2 ? parts.last : '';
+
     _messageSubscription = widget.chatService.messages.listen(_onMessageReceived);
   }
 
@@ -28,43 +40,26 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
     final type = message['type'] as String;
     final payload = message['payload'] as Map<String, dynamic>;
 
-    // --- START FIX ---
-    // This is the crucial change. The main message stream must handle all
-    // message types and route them appropriately. Although this is the "chat"
-    // panel, its listener is active for the whole app session.
     switch (type) {
       case 'chat_broadcast':
       case 'system_broadcast':
         _handleChatMessage(type, payload);
         break;
-
-      // These cases were missing. We now explicitly ignore them here,
-      // as other panels (like the TransfersPanel) have their own direct
-      // subscriptions to the streams they care about. This prevents errors.
-      case 'search_results':
-      case 'transfer_start':
-      case 'transfer_error':
-      case 'network_stats':
-        // Do nothing, other panels are listening for these.
-        break;
-
       default:
-        // Log unknown message types for debugging, but don't crash.
-        print("ChatPanel received unhandled message type: $type");
         return;
     }
-    // --- END FIX ---
   }
 
-  /// Handles only chat-related messages to update the UI.
   void _handleChatMessage(String type, Map<String, dynamic> payload) {
     late final _ChatMessage newMessage;
 
     switch (type) {
       case 'chat_broadcast':
-        final nickname = payload['nickname'] as String;
+        final fullAddress = payload['nickname'] as String?;
+        if (fullAddress == null || fullAddress.isEmpty) return;
+
         final text = payload['text'] as String;
-        newMessage = _ChatMessage(nickname, text, isMe: nickname == widget.nickname);
+        newMessage = _ChatMessage(fullAddress, text, isMe: fullAddress == widget.currentUserAddress);
         break;
       case 'system_broadcast':
         final text = payload['text'] as String;
@@ -80,20 +75,14 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
     }
   }
 
-
   void _sendMessage() {
     final text = _chatController.text.trim();
     if (text.isEmpty) return;
-
-    // Send the message via the service
     widget.chatService.sendMessage(text);
-
-    // The UI will update when the server echoes the message back.
     _chatController.clear();
   }
 
   void _scrollToBottom() {
-    // A short delay ensures the list has been rebuilt before we scroll.
     Future.delayed(const Duration(milliseconds: 100), () {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
@@ -107,7 +96,6 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
 
   @override
   void dispose() {
-    // Clean up resources
     _messageSubscription?.cancel();
     _chatController.dispose();
     _scrollController.dispose();
@@ -128,7 +116,6 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
               itemBuilder: (context, idx) {
                 final msg = _messages[idx];
 
-                // System messages (joins/leaves/errors)
                 if (msg.isSystem) {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -143,8 +130,8 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
                   );
                 }
 
-                // User chat messages
                 final isMe = msg.isMe;
+
                 return Container(
                   margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
                   alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -157,13 +144,17 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // --- FIX: Display the full federated name directly ---
                         if (!isMe)
-                          Text(
-                            msg.nickname,
-                            style: const TextStyle(
-                              color: Colors.pinkAccent,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4.0),
+                            child: Text(
+                              msg.fullAddress,
+                              style: const TextStyle(
+                                color: Colors.pinkAccent,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
                             ),
                           ),
                         Text(
@@ -226,12 +217,11 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
   }
 }
 
-// A simple data class to hold message information.
 class _ChatMessage {
-  final String nickname;
+  final String fullAddress;
   final String text;
   final bool isMe;
   final bool isSystem;
 
-  _ChatMessage(this.nickname, this.text, {required this.isMe, this.isSystem = false});
+  _ChatMessage(this.fullAddress, this.text, {required this.isMe, this.isSystem = false});
 }

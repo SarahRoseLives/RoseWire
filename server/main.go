@@ -18,80 +18,57 @@ import (
 )
 
 const (
-	serverHost  = "0.0.0.0"
-	serverPort  = 2222
-	hostKeyFile = "server_ed25519"
-	nickDBFile  = "nicks.db"
+	serverHost     = "0.0.0.0"
+	serverPort     = 2222
+	hostKeyFile    = "server_ed25519"
+	nickDBFile     = "nicks.db"
+	configFile     = "config.json"
+	httpListenAddr = "0.0.0.0:8080"
 )
 
-var (
-	statusHTTPListen = "127.0.0.1:8080" // set to "0.0.0.0:8080" for public access
-)
-
-// DataStreamManager handles pairing data channels for parallel transfers.
 type DataStreamManager struct {
 	mu      sync.Mutex
-	pending map[string]ssh.Channel // Key: "transferID:streamIndex", Value: the first channel that connected
+	pending map[string]ssh.Channel
 }
 
-// NewDataStreamManager creates a new manager instance.
 func NewDataStreamManager() *DataStreamManager {
 	return &DataStreamManager{
 		pending: make(map[string]ssh.Channel),
 	}
 }
-
-// pipeStreams bi-directionally copies data between two channels using a deadlock-safe pattern.
 func pipeStreams(c1, c2 ssh.Channel) {
 	var once sync.Once
-	// The close function will be called exactly once by the first goroutine to finish.
 	closeFunc := func() {
 		c1.Close()
 		c2.Close()
-		// Removed RemoteAddr as it's not available on ssh.Channel
 		log.Printf("Finished piping streams.")
 	}
-
-	// Copy from c1 to c2
 	go func() {
 		io.Copy(c1, c2)
 		once.Do(closeFunc)
 	}()
-
-	// Copy from c2 to c1
 	go func() {
 		io.Copy(c2, c1)
 		once.Do(closeFunc)
 	}()
 }
-
-// Pair finds the peer for the given key and pipes them together.
-// If the peer is not found, it stores newChan and waits.
 func (dsm *DataStreamManager) Pair(key string, newChan ssh.Channel) {
 	dsm.mu.Lock()
 	peerChan, ok := dsm.pending[key]
 	if ok {
-		// Peer was waiting. Pair them and remove from map.
 		delete(dsm.pending, key)
 		dsm.mu.Unlock()
-
 		log.Printf("Pairing streams for key %s", key)
 		go pipeStreams(newChan, peerChan)
 		return
 	}
-
-	// We are the first. Add to map and wait for peer.
 	dsm.pending[key] = newChan
 	dsm.mu.Unlock()
 	log.Printf("Stream for key %s is pending a peer", key)
 
-	// Add a timeout to prevent dangling channels.
-	// The newChan.Context() method does not exist, so we rely only on the timer.
-	// If a client disconnects, this entry will leak for 30 seconds before being cleaned up.
 	go func() {
-		<-time.After(30 * time.Second) // 30 second timeout to connect
+		<-time.After(30 * time.Second)
 		dsm.mu.Lock()
-		// Check if we are still pending after the timeout
 		if ch, stillPending := dsm.pending[key]; stillPending && ch == newChan {
 			log.Printf("Timed out waiting for peer for key %s. Closing channel.", key)
 			delete(dsm.pending, key)
@@ -103,7 +80,7 @@ func (dsm *DataStreamManager) Pair(key string, newChan ssh.Channel) {
 
 type NickDB struct {
 	sync.Mutex
-	NickToKey map[string]string // nickname -> base64 public key
+	NickToKey map[string]string
 }
 
 func LoadNickDB(path string) (*NickDB, error) {
@@ -116,18 +93,15 @@ func LoadNickDB(path string) (*NickDB, error) {
 		return nil, err
 	}
 	defer file.Close()
-
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		parts := strings.SplitN(scanner.Text(), " ", 2)
-		if len(parts) != 2 {
-			continue
+		if len(parts) == 2 {
+			db.NickToKey[parts[0]] = parts[1]
 		}
-		db.NickToKey[parts[0]] = parts[1]
 	}
 	return db, scanner.Err()
 }
-
 func (db *NickDB) Save(path string) error {
 	db.Lock()
 	defer db.Unlock()
@@ -142,7 +116,6 @@ func (db *NickDB) Save(path string) error {
 	}
 	return os.Rename(tmp, path)
 }
-
 func (db *NickDB) Register(nick string, pubkey ssh.PublicKey) error {
 	db.Lock()
 	defer db.Unlock()
@@ -166,8 +139,40 @@ func ensureHostKey(path string) (ssh.Signer, error) {
 	return ssh.ParsePrivateKey(keyBytes)
 }
 
+// startHttpServer now includes S2S and WebFinger handlers.
+func startHttpServer(cfg *Config, nickDB *NickDB, chatHub *ChatHub) {
+	statusSvc := NewStatusService(chatHub, httpListenAddr)
+	webfingerHandler := &WebFingerHandler{Cfg: cfg, NickDB: nickDB}
+	s2sHandler := NewS2SHandler(cfg, chatHub) // <-- Create the new S2S handler
+
+	mux := http.NewServeMux()
+
+	// Public routes
+	mux.Handle("/", statusSvc)
+	mux.Handle("/api/status", statusSvc)
+	mux.Handle("/.well-known/webfinger", webfingerHandler)
+
+	// --- FIX: Add the new S2S routes with authentication middleware ---
+	s2sRouter := http.NewServeMux()
+	s2sRouter.HandleFunc("/api/s2s/inbox", s2sHandler.Inbox)
+	// Add other S2S routes like /user/ and /search/ here later
+	mux.Handle("/api/s2s/", s2sHandler.authMiddleware(s2sRouter))
+
+	log.Printf("HTTP services (Status, WebFinger, S2S) listening at http://%s/", httpListenAddr)
+	if err := http.ListenAndServe(httpListenAddr, mux); err != nil {
+		log.Fatalf("Failed to start HTTP server: %v", err)
+	}
+}
+
 func main() {
-	fmt.Printf("Starting RoseWire relay server on %s:%d ...\n", serverHost, serverPort)
+	fmt.Printf("Starting RoseWire server on %s:%d ...\n", serverHost, serverPort)
+
+	cfg, err := LoadConfig(configFile)
+	if err != nil {
+		log.Fatalf("Failed to load %s: %v. Please create it.", configFile, err)
+	}
+	log.Printf("Server domain configured as: %s", cfg.Domain)
+
 	hostSigner, err := ensureHostKey(hostKeyFile)
 	if err != nil {
 		log.Fatalf("Failed to load host key: %v", err)
@@ -179,22 +184,16 @@ func main() {
 	}
 
 	fileRegistry := NewFileRegistry()
-	chatHub := NewChatHub(fileRegistry)
+	chatHub := NewChatHub(fileRegistry, cfg)
 	dataManager := NewDataStreamManager()
 
-	statusSvc := NewStatusService(chatHub, statusHTTPListen)
-	go func() {
-		log.Printf("Status web server listening at http://%s/", statusHTTPListen)
-		http.Handle("/", statusSvc)
-		http.Handle("/api/status", statusSvc)
-		http.ListenAndServe(statusHTTPListen, nil)
-	}()
+	go startHttpServer(cfg, nickDB, chatHub)
 
-	config := &ssh.ServerConfig{
+	sshConfig := &ssh.ServerConfig{
 		PublicKeyCallback: func(meta ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
 			nick := meta.User()
-			if nick == "" {
-				return nil, fmt.Errorf("nickname missing")
+			if nick == "" || strings.Contains(nick, "@") {
+				return nil, fmt.Errorf("invalid nickname format; must not be empty or contain '@'")
 			}
 			err := nickDB.Register(nick, pubKey)
 			if err != nil {
@@ -210,21 +209,21 @@ func main() {
 			}, nil
 		},
 	}
-	config.AddHostKey(hostSigner)
+	sshConfig.AddHostKey(hostSigner)
 
 	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", serverHost, serverPort))
 	if err != nil {
-		log.Fatalf("Failed to listen: %v", err)
+		log.Fatalf("Failed to listen on port %d: %v", serverPort, err)
 	}
 	defer listener.Close()
 
 	for {
 		nConn, err := listener.Accept()
 		if err != nil {
-			log.Printf("Failed to accept: %v", err)
+			log.Printf("Failed to accept connection: %v", err)
 			continue
 		}
-		go handleConn(nConn, config, chatHub, dataManager)
+		go handleConn(nConn, sshConfig, chatHub, dataManager)
 	}
 }
 
@@ -287,7 +286,7 @@ func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, ni
 				parts := strings.Split(subsystem, ":")
 				if len(parts) == 3 && parts[0] == "data-transfer" {
 					isDataSubsystem = true
-					dataKey = fmt.Sprintf("%s:%s", parts[1], parts[2]) // transferID:streamIndex
+					dataKey = fmt.Sprintf("%s:%s", parts[1], parts[2])
 				}
 			}
 		case "shell":

@@ -11,8 +11,6 @@ class LibraryPanelMobile extends StatefulWidget {
   final String? initialPath;
   final void Function(String folderPath, List<Map<String, dynamic>> files) onLibraryChanged;
 
-  // --- START FIX ---
-  // The constructor now correctly includes the 'initialPath' parameter.
   const LibraryPanelMobile({
     super.key,
     required this.nickname,
@@ -20,7 +18,6 @@ class LibraryPanelMobile extends StatefulWidget {
     required this.onLibraryChanged,
     this.initialPath,
   });
-  // --- END FIX ---
 
   @override
   State<LibraryPanelMobile> createState() => _LibraryPanelMobileState();

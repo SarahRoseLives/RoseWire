@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:ssh_key/ssh_key.dart' as ssh_key;
 import 'package:pointycastle/export.dart' as pointy_castle;
 import 'package:dartssh2/dartssh2.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class LoginPanelMobile extends StatefulWidget {
   final void Function(String nickname, String keyPath) onLogin;
@@ -24,10 +25,29 @@ class _LoginPanelMobileState extends State<LoginPanelMobile> {
   bool _creatingNew = false;
   String? _error;
 
+  final _serverController = TextEditingController();
+  String _serverHost = 'rosewire.rosevines.network'; // Default
+
   @override
   void initState() {
     super.initState();
-    _loadKeys();
+    _initialize();
+  }
+
+  Future<void> _initialize() async {
+    await _loadServerPreference();
+    await _loadKeys();
+    if (mounted) {
+      setState(() {
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _loadServerPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    _serverHost = prefs.getString('rosewire_server') ?? 'rosewire.rosevines.network';
+    _serverController.text = _serverHost;
   }
 
   Future<void> _loadKeys() async {
@@ -61,7 +81,6 @@ class _LoginPanelMobileState extends State<LoginPanelMobile> {
           _selectedNick = pairs[0]['nickname'];
           _selectedKeyPath = pairs[0]['keyPath'];
         }
-        _loading = false;
       });
     }
   }
@@ -77,7 +96,6 @@ class _LoginPanelMobileState extends State<LoginPanelMobile> {
     });
 
     try {
-      // Key generation logic (identical to desktop)
       final keyGen = pointy_castle.RSAKeyGenerator();
       final random = pointy_castle.FortunaRandom();
       final seed = Uint8List.fromList(
@@ -89,17 +107,10 @@ class _LoginPanelMobileState extends State<LoginPanelMobile> {
           random));
 
       final keyPair = keyGen.generateKeyPair();
-      final rsaPublicKey = keyPair.publicKey as pointy_castle.RSAPublicKey;
       final rsaPrivateKey = keyPair.privateKey as pointy_castle.RSAPrivateKey;
-
-      final pubKeyWithInfo =
-          ssh_key.RSAPublicKeyWithInfo.fromRSAPublicKey(rsaPublicKey);
       final pvtKeyWithInfo =
           ssh_key.RSAPrivateKeyWithInfo.fromRSAPrivateKey(rsaPrivateKey);
-
       final privateKeyPem = pvtKeyWithInfo.encode(ssh_key.PvtKeyEncoding.pkcs1);
-      final publicKeyOpenSsh =
-          pubKeyWithInfo.encode(ssh_key.PubKeyEncoding.openSsh);
 
       final dir = await getApplicationSupportDirectory();
       final keysDir = Directory('${dir.path}/rosewire_keys');
@@ -109,11 +120,9 @@ class _LoginPanelMobileState extends State<LoginPanelMobile> {
       final filenameBase =
           '${DateTime.now().millisecondsSinceEpoch}_${_newNick.trim().replaceAll(" ", "_")}';
       final keyPath = '${keysDir.path}/$filenameBase.pem';
-      final pubPath = keyPath.replaceAll('.pem', '.pub');
       final nickPath = keyPath.replaceAll('.pem', '.nick');
 
       await File(keyPath).writeAsString(privateKeyPem);
-      await File(pubPath).writeAsString(publicKeyOpenSsh);
       await File(nickPath).writeAsString(_newNick.trim());
 
       if (mounted) {
@@ -142,6 +151,12 @@ class _LoginPanelMobileState extends State<LoginPanelMobile> {
       return;
     }
 
+    final host = _serverController.text.trim();
+    if (host.isEmpty) {
+      setState(() => _error = "Server address cannot be empty.");
+      return;
+    }
+
     setState(() {
       _loading = true;
       _error = null;
@@ -150,7 +165,8 @@ class _LoginPanelMobileState extends State<LoginPanelMobile> {
     SSHClient? client;
     try {
       final privateKey = await File(_selectedKeyPath!).readAsString();
-      final socket = await SSHSocket.connect('192.168.1.240', 2222);
+
+      final socket = await SSHSocket.connect(host, 2222).timeout(const Duration(seconds: 10));
 
       client = SSHClient(
         socket,
@@ -161,6 +177,10 @@ class _LoginPanelMobileState extends State<LoginPanelMobile> {
       await client.authenticated;
       client.close();
       await client.done;
+
+      // Save the successful server address for next time
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('rosewire_server', host);
 
       widget.onLogin(_selectedNick!, _selectedKeyPath!);
     } catch (e) {
@@ -176,10 +196,12 @@ class _LoginPanelMobileState extends State<LoginPanelMobile> {
 
   @override
   Widget build(BuildContext context) {
+    final fullUserAddress = _selectedNick != null ? '@$_selectedNick@${_serverController.text}' : 'No Profile Selected';
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Center(
-        child: SingleChildScrollView( // Added for smaller screens
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
           child: Card(
             color: Colors.grey[900],
@@ -187,14 +209,14 @@ class _LoginPanelMobileState extends State<LoginPanelMobile> {
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
             child: Container(
-              width: 400, // Max width for consistency
+              width: 400,
               padding: const EdgeInsets.all(32),
               child: _loading
                   ? Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        CircularProgressIndicator(),
-                        SizedBox(height: 16),
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 16),
                         Text("Please wait...", style: TextStyle(color: Colors.white70))
                       ],
                     )
@@ -209,6 +231,15 @@ class _LoginPanelMobileState extends State<LoginPanelMobile> {
                               color: Colors.pinkAccent),
                         ),
                         const SizedBox(height: 24),
+                        TextField(
+                          controller: _serverController,
+                          decoration: const InputDecoration(
+                            labelText: "Instance Address",
+                            hintText: "e.g., rosewire.rosevines.network",
+                          ),
+                          onChanged: (value) => setState(() {}), // Rebuild to update user address display
+                        ),
+                        const SizedBox(height: 16),
                         if (_keyNickPairs.isNotEmpty && !_creatingNew) ...[
                           DropdownButtonFormField<String>(
                             value: _selectedNick,
@@ -231,10 +262,10 @@ class _LoginPanelMobileState extends State<LoginPanelMobile> {
                             decoration:
                                 const InputDecoration(labelText: "Select Profile"),
                           ),
-                          const SizedBox(height: 16),
+                          const SizedBox(height: 24),
                           ElevatedButton.icon(
                             icon: const Icon(Icons.login),
-                            label: const Text("Login"),
+                            label: Text("Login as $fullUserAddress"),
                             onPressed: _loading ? null : _onLoginPressed,
                           ),
                           const SizedBox(height: 16),
@@ -269,7 +300,7 @@ class _LoginPanelMobileState extends State<LoginPanelMobile> {
                           Padding(
                             padding: const EdgeInsets.only(top: 10),
                             child: Text(_error!,
-                                style: TextStyle(color: Colors.redAccent)),
+                                style: const TextStyle(color: Colors.redAccent)),
                           ),
                       ],
                     ),

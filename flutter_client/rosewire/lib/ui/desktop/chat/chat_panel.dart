@@ -1,16 +1,19 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import '../../../services/ssh_chat_service.dart'; // <-- Import service
+import '../../../services/ssh_chat_service.dart';
 import '../rosewire_desktop.dart';
 
 class ChatPanel extends StatefulWidget {
-  final SshChatService chatService; // <-- Receive the service
-  final String nickname; // <-- Receive the user's nickname
+  final SshChatService chatService;
+  final String nickname;
+  // The full address of the currently logged-in user (e.g., @user@instance.com)
+  final String currentUserAddress;
 
   const ChatPanel({
     super.key,
     required this.chatService,
     required this.nickname,
+    required this.currentUserAddress,
   });
 
   @override
@@ -20,13 +23,17 @@ class ChatPanel extends StatefulWidget {
 class _ChatPanelState extends State<ChatPanel> {
   final TextEditingController _chatController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  final List<_ChatMessage> _messages = []; // <-- Start with an empty list
+  final List<_ChatMessage> _messages = [];
   StreamSubscription? _messageSubscription;
+  late final String _currentUserInstance;
 
   @override
   void initState() {
     super.initState();
-    // Subscribe to the message stream from the service
+    // Safely extract the instance domain from the current user's address
+    final parts = widget.currentUserAddress.split('@');
+    _currentUserInstance = parts.length > 2 ? parts.last : '';
+
     _messageSubscription = widget.chatService.messages.listen(_onMessageReceived);
   }
 
@@ -38,16 +45,20 @@ class _ChatPanelState extends State<ChatPanel> {
 
     switch (type) {
       case 'chat_broadcast':
-        final nickname = payload['nickname'] as String;
+        // Safely handle the nickname, which is now the full federated address.
+        final fullAddress = payload['nickname'] as String?;
+        if (fullAddress == null || fullAddress.isEmpty) {
+            print("Received chat_broadcast with no nickname. Skipping.");
+            return;
+        }
         final text = payload['text'] as String;
-        newMessage = _ChatMessage(nickname, text, isMe: nickname == widget.nickname);
+        newMessage = _ChatMessage(fullAddress, text, isMe: fullAddress == widget.currentUserAddress);
         break;
       case 'system_broadcast':
         final text = payload['text'] as String;
         newMessage = _ChatMessage("System", text, isMe: false, isSystem: true);
         break;
       default:
-        // Ignore other message types like network_stats, etc.
         return;
     }
 
@@ -62,17 +73,11 @@ class _ChatPanelState extends State<ChatPanel> {
   void _sendMessage() {
     final text = _chatController.text.trim();
     if (text.isEmpty) return;
-
-    // Send the message via the service
     widget.chatService.sendMessage(text);
-
-    // The UI will update when the server echoes the message back.
-    // This ensures the view is always synced with the server state.
     _chatController.clear();
   }
 
   void _scrollToBottom() {
-    // A short delay ensures the list has been rebuilt before we scroll.
     Future.delayed(const Duration(milliseconds: 50), () {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
@@ -86,7 +91,6 @@ class _ChatPanelState extends State<ChatPanel> {
 
   @override
   void dispose() {
-    // Clean up the subscription to avoid memory leaks
     _messageSubscription?.cancel();
     _chatController.dispose();
     _scrollController.dispose();
@@ -100,7 +104,7 @@ class _ChatPanelState extends State<ChatPanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
+          const Text(
             "Global Network Chat",
             style: TextStyle(
               fontSize: 18,
@@ -108,7 +112,7 @@ class _ChatPanelState extends State<ChatPanel> {
               fontWeight: FontWeight.w600,
             ),
           ),
-          SizedBox(height: 18),
+          const SizedBox(height: 18),
           Expanded(
             child: Container(
               decoration: BoxDecoration(
@@ -125,7 +129,6 @@ class _ChatPanelState extends State<ChatPanel> {
                 itemBuilder: (context, idx) {
                   final msg = _messages[idx];
 
-                  // Custom widget for system messages (joins/leaves)
                   if (msg.isSystem) {
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -141,75 +144,91 @@ class _ChatPanelState extends State<ChatPanel> {
                   }
 
                   final isMe = msg.isMe;
+                  // --- START FEDERATION UI LOGIC ---
+                  final parts = msg.fullAddress.split('@');
+                  final nickname = parts.length > 1 ? parts[1] : msg.fullAddress;
+                  final instance = parts.length > 2 ? parts[2] : '';
+                  final isRemote = instance.isNotEmpty && instance != _currentUserInstance;
+                  // --- END FEDERATION UI LOGIC ---
+
+                  // Use local nickname for "me" avatar, parsed nickname for others
+                  final avatarChar = (isMe ? widget.nickname : nickname).substring(0, 1).toUpperCase();
+                  final avatarColor = isMe ? roseGreen : rosePink;
+
+                  final avatar = CircleAvatar(
+                      radius: 16,
+                      backgroundColor: avatarColor,
+                      child: Text(
+                        avatarChar,
+                        style: const TextStyle(
+                          color: roseWhite, fontWeight: FontWeight.bold, fontSize: 16,
+                        ),
+                      ),
+                    );
+
+                  final bubble = Flexible(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: isMe ? rosePink.withOpacity(0.7) : rosePurple.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (!isMe)
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  nickname,
+                                  style: const TextStyle(
+                                    color: rosePink,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                if(isRemote)
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 4.0),
+                                    child: Text(
+                                      '@$instance',
+                                      style: TextStyle(
+                                        color: roseWhite.withOpacity(0.5),
+                                        fontWeight: FontWeight.normal,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          Text(
+                            msg.text,
+                            style: const TextStyle(
+                              color: roseWhite,
+                              fontSize: 15,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+
                   return Container(
-                    margin: EdgeInsets.symmetric(vertical: 6, horizontal: 12),
-                    alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                    margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
                     child: Row(
                       mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (!isMe)
-                          CircleAvatar(
-                            radius: 16,
-                            backgroundColor: rosePink,
-                            child: Text(
-                              msg.nickname.substring(0, 1).toUpperCase(),
-                              style: TextStyle(
-                                color: roseWhite, fontWeight: FontWeight.bold, fontSize: 16,
-                              ),
-                            ),
-                          ),
-                        if (!isMe) SizedBox(width: 8),
-                        Flexible(
-                          child: Container(
-                            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: isMe ? rosePink.withOpacity(0.7) : rosePurple.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                if (!isMe)
-                                  Text(
-                                    msg.nickname,
-                                    style: TextStyle(
-                                      color: rosePink,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                Text(
-                                  msg.text,
-                                  style: TextStyle(
-                                    color: roseWhite,
-                                    fontSize: 15,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        if (isMe) SizedBox(width: 8),
-                        if (isMe)
-                          CircleAvatar(
-                            radius: 16,
-                            backgroundColor: roseGreen,
-                            child: Text(
-                              msg.nickname.substring(0, 1).toUpperCase(),
-                              style: TextStyle(
-                                color: roseWhite, fontWeight: FontWeight.bold, fontSize: 16,
-                              ),
-                            ),
-                          ),
-                      ],
+                      children: isMe
+                        ? [ bubble, const SizedBox(width: 8), avatar ]
+                        : [ avatar, const SizedBox(width: 8), bubble ],
                     ),
                   );
                 },
               ),
             ),
           ),
-          SizedBox(height: 12),
+          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(
@@ -224,20 +243,20 @@ class _ChatPanelState extends State<ChatPanel> {
                       borderRadius: BorderRadius.circular(12),
                       borderSide: BorderSide.none,
                     ),
-                    contentPadding: EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
                   ),
-                  style: TextStyle(color: roseWhite, fontSize: 15),
+                  style: const TextStyle(color: roseWhite, fontSize: 15),
                   onSubmitted: (_) => _sendMessage(),
                 ),
               ),
-              SizedBox(width: 14),
+              const SizedBox(width: 14),
               ElevatedButton.icon(
-                icon: Icon(Icons.send),
-                label: Text("Send"),
+                icon: const Icon(Icons.send),
+                label: const Text("Send"),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: rosePink,
                   foregroundColor: roseWhite,
-                  padding: EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   elevation: 0,
                 ),
@@ -251,12 +270,11 @@ class _ChatPanelState extends State<ChatPanel> {
   }
 }
 
-// Data class is unchanged
 class _ChatMessage {
-  final String nickname;
+  final String fullAddress;
   final String text;
   final bool isMe;
   final bool isSystem;
 
-  _ChatMessage(this.nickname, this.text, {required this.isMe, this.isSystem = false});
+  _ChatMessage(this.fullAddress, this.text, {required this.isMe, this.isSystem = false});
 }

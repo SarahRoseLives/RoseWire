@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../rosewire_desktop.dart';
-import '../../../services/ssh_chat_service.dart';
 
-// Accept a SshChatService to update server
 class SettingsPanel extends StatefulWidget {
-  final SshChatService? chatService;
-  const SettingsPanel({super.key, this.chatService});
+  const SettingsPanel({super.key});
 
   @override
   State<SettingsPanel> createState() => _SettingsPanelState();
@@ -13,92 +11,122 @@ class SettingsPanel extends StatefulWidget {
 
 class _SettingsPanelState extends State<SettingsPanel> {
   final _serverController = TextEditingController();
-  String _currentServer = '';
+  String _currentServer = 'rosewire.rosevines.network';
   String? _notice;
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    final host = widget.chatService?.host ?? '192.168.1.240';
-    setState(() {
-      _currentServer = host;
-      _serverController.text = host;
-    });
+    _loadServerPreference();
   }
 
-  void _saveServer() {
+  Future<void> _loadServerPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    // Load the saved server, defaulting if it doesn't exist.
+    final server = prefs.getString('rosewire_server') ?? 'rosewire.rosevines.network';
+    if (mounted) {
+      setState(() {
+        _currentServer = server;
+        _serverController.text = server;
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _saveServerPreference() async {
     final server = _serverController.text.trim();
     if (server.isEmpty) return;
-    setState(() {
-      _currentServer = server;
-      _notice = "Server updated. Please restart to apply.";
-    });
-    widget.chatService?.setServer(host: server);
-    // Optionally persist to disk for next session, left as TODO
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('rosewire_server', server);
+
+    if (mounted) {
+      setState(() {
+        _currentServer = server;
+        _notice = "Instance updated. Please restart the app to connect to the new instance.";
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _serverController.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              "Settings",
-              style: TextStyle(color: roseWhite, fontSize: 24, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 32),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                "Network Server:",
-                style: TextStyle(color: roseWhite, fontSize: 16, fontWeight: FontWeight.w600),
+     if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 500),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Settings",
+                style: TextStyle(color: roseWhite, fontSize: 24, fontWeight: FontWeight.bold),
               ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _serverController,
-              decoration: InputDecoration(
-                hintText: "192.168.1.240",
-                hintStyle: TextStyle(color: roseWhite.withOpacity(0.5)),
-                filled: true,
-                fillColor: roseGray.withOpacity(0.85),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none,
+              const SizedBox(height: 32),
+              const Text(
+                "Home Instance",
+                style: TextStyle(color: rosePink, fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+               Text(
+                "This is the server your client connects to. Your identity will be tied to this instance (e.g., @user@instance.com).",
+                style: TextStyle(color: roseWhite.withOpacity(0.7), fontSize: 14),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _serverController,
+                decoration: InputDecoration(
+                  hintText: "e.g., rosewire.rosevines.network",
+                  hintStyle: TextStyle(color: roseWhite.withOpacity(0.5)),
+                  filled: true,
+                  fillColor: roseGray.withOpacity(0.85),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide.none,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
                 ),
-                contentPadding: EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                style: const TextStyle(color: roseWhite, fontSize: 15),
               ),
-              style: TextStyle(color: roseWhite, fontSize: 15),
-            ),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              icon: Icon(Icons.save),
-              label: Text("Save Server"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: rosePink,
-                foregroundColor: roseWhite,
-                padding: EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                elevation: 0,
+              const SizedBox(height: 20),
+              Align(
+                alignment: Alignment.centerRight,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.save),
+                  label: const Text("Save Instance"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: rosePink,
+                    foregroundColor: roseWhite,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    elevation: 0,
+                  ),
+                  onPressed: _saveServerPreference,
+                ),
               ),
-              onPressed: _saveServer,
-            ),
-            if (_notice != null) ...[
-              const SizedBox(height: 18),
-              Text(
-                _notice!,
-                style: TextStyle(color: roseGreen, fontSize: 14),
-              ),
+              if (_notice != null) ...[
+                const SizedBox(height: 24),
+                Center(
+                  child: Text(
+                    _notice!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: roseGreen, fontSize: 14),
+                  ),
+                ),
+              ],
             ],
-            const SizedBox(height: 32),
-            Text(
-              "Settings will be here soon!",
-              style: TextStyle(color: roseWhite, fontSize: 20),
-            ),
-          ],
+          ),
         ),
       ),
     );

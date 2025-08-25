@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/ssh_chat_service.dart';
 import 'search/search_panel.dart';
@@ -36,38 +37,52 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
   late final SshChatService _sshChatService;
   String? _libraryFolder;
   List<File> _libraryFiles = [];
+  String _serverHost = 'rosewire.rosevines.network'; // Store the current host
 
-  late final List<Widget> _panels;
+  late List<Widget> _panels = []; // Initialize as empty
 
   @override
   void initState() {
     super.initState();
-    _sshChatService = SshChatService(); // Default host is 192.168.1.240
-
-    _panels = [
-      SearchPanel(chatService: _sshChatService),
-      TransfersPanel(chatService: _sshChatService),
-      LibraryPanel(
-        nickname: widget.nickname,
-        onLibraryChanged: _handleLibraryChanged,
-      ),
-      ChatPanel(
-        nickname: widget.nickname,
-        chatService: _sshChatService,
-      ),
-      NetworkPanel(chatService: _sshChatService),
-      SettingsPanel(chatService: _sshChatService), // <-- Pass service to settings
-      AboutPanel(),
-    ];
-
+    _sshChatService = SshChatService();
+    // Initialize with dummy panels first
+    _buildPanels();
     _initializeConnection();
   }
 
-  /// Establishes the SSH connection and then shares the initial library.
-  void _initializeConnection() async {
+  void _buildPanels() {
+    final currentUserAddress = '@${widget.nickname}@$_serverHost';
+    setState(() {
+      _panels = [
+        SearchPanel(chatService: _sshChatService),
+        TransfersPanel(chatService: _sshChatService),
+        LibraryPanel(
+          nickname: widget.nickname,
+          onLibraryChanged: _handleLibraryChanged,
+        ),
+        ChatPanel(
+          nickname: widget.nickname,
+          chatService: _sshChatService,
+          currentUserAddress: currentUserAddress,
+        ),
+        NetworkPanel(chatService: _sshChatService),
+        const SettingsPanel(),
+        const AboutPanel(),
+      ];
+    });
+  }
+
+  Future<void> _initializeConnection() async {
+    final prefs = await SharedPreferences.getInstance();
+    _serverHost = prefs.getString('rosewire_server') ?? 'rosewire.rosevines.network';
+
+    // Rebuild panels now that we have the correct host
+    _buildPanels();
+
     await _sshChatService.connect(
       nickname: widget.nickname,
       keyPath: widget.keyPath,
+      host: _serverHost,
     );
     await _restoreLibraryAndShare();
   }
@@ -88,7 +103,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
         }
       }
     } catch (e) {
-      // Ignore errors, let user select manually later
+      print("Could not restore library on desktop: $e");
     }
   }
 
@@ -98,7 +113,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
       _libraryFiles = files;
     });
 
-    _sshChatService.setLibraryPath(folderPath); // Ensure service knows path
+    _sshChatService.setLibraryPath(folderPath);
     _shareLibraryToServer();
   }
 
@@ -174,6 +189,19 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
               ),
             ),
             destinations: _destinations,
+            trailing: Expanded(
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 20.0),
+                  child: IconButton(
+                    icon: const Icon(Icons.info_outline),
+                    tooltip: "About",
+                    onPressed: () => setState(() => _selectedPanelIndex = 6),
+                  ),
+                ),
+              ),
+            ),
           ),
           Expanded(
             child: Container(
@@ -186,7 +214,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
               ),
               child: Center(
                 child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: 900, maxHeight: 700),
+                  constraints: const BoxConstraints(maxWidth: 900, maxHeight: 700),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(32),
                     child: BackdropFilter(
@@ -198,7 +226,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
                             BoxShadow(
                               color: rosePurple.withOpacity(0.15),
                               blurRadius: 24,
-                              offset: Offset(0, 8),
+                              offset: const Offset(0, 8),
                             ),
                           ],
                         ),
@@ -207,10 +235,11 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
                           children: [
                             _RoseWireHeader(
                               nickname: widget.nickname,
-                              onAboutTap: () => setState(() => _selectedPanelIndex = 6),
                             ),
                             Expanded(
-                              child: IndexedStack(
+                              child: _panels.isEmpty
+                                ? Center(child: CircularProgressIndicator())
+                                : IndexedStack(
                                 index: _selectedPanelIndex,
                                 children: _panels,
                               ),
@@ -233,8 +262,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
 
 class _RoseWireHeader extends StatelessWidget {
   final String nickname;
-  final VoidCallback onAboutTap;
-  const _RoseWireHeader({required this.nickname, required this.onAboutTap});
+  const _RoseWireHeader({required this.nickname});
 
   @override
   Widget build(BuildContext context) {
@@ -252,7 +280,7 @@ class _RoseWireHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Text(
+          const Text(
             'RoseWire',
             style: TextStyle(
               fontSize: 34,
@@ -262,9 +290,9 @@ class _RoseWireHeader extends StatelessWidget {
               fontFamily: 'Segoe UI',
             ),
           ),
-          SizedBox(width: 18),
+          const SizedBox(width: 18),
           Container(
-            padding: EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
             decoration: BoxDecoration(
               color: rosePurple.withOpacity(0.2),
               borderRadius: BorderRadius.circular(8),
@@ -278,20 +306,14 @@ class _RoseWireHeader extends StatelessWidget {
               ),
             ),
           ),
-          Spacer(),
+          const Spacer(),
           Text(
             nickname,
-            style: TextStyle(
+            style: const TextStyle(
               color: roseWhite,
               fontWeight: FontWeight.bold,
               fontSize: 16,
             ),
-          ),
-          SizedBox(width: 12),
-          IconButton(
-            icon: Icon(Icons.info_outline, color: roseWhite.withOpacity(0.9)),
-            tooltip: "About",
-            onPressed: onAboutTap,
           ),
         ],
       ),
@@ -319,17 +341,17 @@ class _RoseWireStatusBar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(Icons.lock, size: 16, color: roseGreen),
-          SizedBox(width: 8),
+          const Icon(Icons.lock, size: 16, color: roseGreen),
+          const SizedBox(width: 8),
           Text(
             "Connected via SSH as $nickname",
-            style: TextStyle(
+            style: const TextStyle(
               color: roseGreen,
               fontWeight: FontWeight.bold,
               fontSize: 14,
             ),
           ),
-          Spacer(),
+          const Spacer(),
           Text(
             "RoseWire 2.0 - Modern Edition",
             style: TextStyle(

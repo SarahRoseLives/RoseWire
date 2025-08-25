@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/ssh_chat_service.dart';
 import 'login_panel.dart';
 import 'chat/chat_panel.dart';
@@ -23,8 +24,9 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
   bool _loggedIn = false;
   String? _nickname;
   String? _keyPath;
-  int _selectedTab = 3; // Default to Chat
+  int _selectedTab = 3;
   String? _libraryPath;
+  String _serverHost = 'rosewire.rosevines.network'; // Store the current host
 
   late final SshChatService _chatService = SshChatService();
 
@@ -43,9 +45,10 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
   }
 
   Future<void> _initializeServicesAfterLogin(String nickname, String keyPath) async {
-    String? loadedPath;
+    final prefs = await SharedPreferences.getInstance();
+    _serverHost = prefs.getString('rosewire_server') ?? 'rosewire.rosevines.network';
 
-    // 1. Try to restore the user's previously selected library path.
+    String? loadedPath;
     try {
       final configFile = await _getLibraryConfigFile(nickname);
       if (await configFile.exists()) {
@@ -56,46 +59,38 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
       print("Could not restore library path config: $e");
     }
 
-    // --- START FIX ---
-    // 2. If no path was restored, create and set a safe, default path.
     if (loadedPath == null || loadedPath.isEmpty) {
-        // getExternalStorageDirectory() returns a path like /storage/emulated/0/Android/data/com.example.rosewire/files
-        // This directory is guaranteed to be writable without special permissions.
         final Directory? appDir = await getExternalStorageDirectory();
         if (appDir != null) {
             loadedPath = appDir.path;
-            print("No saved path found. Using default app directory: $loadedPath");
         } else {
             print("ERROR: Could not get external storage directory.");
-            // Handle error case, maybe show a message to the user
             return;
         }
     }
-    // --- END FIX ---
 
-    // 3. Set the now-guaranteed-to-be-valid path on the service and in the state.
     await _chatService.setLibraryPath(loadedPath);
     setState(() {
       _libraryPath = loadedPath;
     });
-    print("Library path initialized to: $_libraryPath");
 
-    // 4. Connect to the server.
-    await _chatService.connect(nickname: nickname, keyPath: keyPath);
+    await _chatService.connect(
+      nickname: nickname,
+      keyPath: keyPath,
+      host: _serverHost,
+    );
 
-    // 5. Automatically share files from the initialized library path.
     final dir = Directory(_libraryPath!);
     if (await dir.exists()) {
        final files = await dir.list().where((f) => f is File).cast<File>().toList();
        final filesPayload = files.map((file) {
-        return {
-          "Name": file.path.split('/').last,
-          "Size": file.lengthSync(),
-          "IsDir": false,
-        };
-      }).toList();
+         return {
+           "Name": file.path.split('/').last,
+           "Size": file.lengthSync(),
+           "IsDir": false,
+         };
+       }).toList();
       _chatService.shareFiles(filesPayload);
-      print("Automatically shared ${filesPayload.length} files from initialized library.");
     }
   }
 
@@ -105,23 +100,31 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
     setState(() {
       _libraryPath = folderPath;
     });
-    print("Library changed by user. Path set and ${files.length} files shared.");
   }
 
-  List<Widget> get _tabs => [
-        SearchPanelMobile(chatService: _chatService),
-        TransfersPanelMobile(chatService: _chatService),
-        LibraryPanelMobile(
-          nickname: _nickname ?? '',
-          chatService: _chatService,
-          onLibraryChanged: _handleLibraryChanged,
-          initialPath: _libraryPath,
-        ),
-        ChatPanelMobile(chatService: _chatService, nickname: _nickname ?? ''),
-        NetworkPanelMobile(chatService: _chatService),
-        const SettingsPanelMobile(),
-        const AboutPanelMobile(),
-      ];
+  List<Widget> get _tabs {
+    // Construct the full user address to pass to the chat panel
+    final currentUserAddress = '@${_nickname ?? ''}@$_serverHost';
+
+    return [
+      SearchPanelMobile(chatService: _chatService),
+      TransfersPanelMobile(chatService: _chatService),
+      LibraryPanelMobile(
+        nickname: _nickname ?? '',
+        chatService: _chatService,
+        onLibraryChanged: _handleLibraryChanged,
+        initialPath: _libraryPath,
+      ),
+      ChatPanelMobile(
+        chatService: _chatService,
+        nickname: _nickname ?? '',
+        currentUserAddress: currentUserAddress,
+      ),
+      NetworkPanelMobile(chatService: _chatService),
+      const SettingsPanelMobile(),
+      const AboutPanelMobile(),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {

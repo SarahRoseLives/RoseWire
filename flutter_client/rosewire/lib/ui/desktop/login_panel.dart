@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:ssh_key/ssh_key.dart' as ssh_key;
 import 'package:pointycastle/export.dart' as pointy_castle;
 import 'package:dartssh2/dartssh2.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class LoginPanel extends StatefulWidget {
   final void Function(String nickname, String keyPath) onLogin;
@@ -24,10 +25,29 @@ class _LoginPanelState extends State<LoginPanel> {
   bool _creatingNew = false;
   String? _error;
 
+  final _serverController = TextEditingController();
+  String _serverHost = 'rosewire.rosevines.network'; // Default
+
   @override
   void initState() {
     super.initState();
-    _loadKeys();
+    _initialize();
+  }
+
+  Future<void> _initialize() async {
+    await _loadServerPreference();
+    await _loadKeys();
+    if (mounted) {
+      setState(() {
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _loadServerPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    _serverHost = prefs.getString('rosewire_server') ?? 'rosewire.rosevines.network';
+    _serverController.text = _serverHost;
   }
 
   Future<void> _loadKeys() async {
@@ -60,7 +80,6 @@ class _LoginPanelState extends State<LoginPanel> {
         _selectedNick = pairs[0]['nickname'];
         _selectedKeyPath = pairs[0]['keyPath'];
       }
-      _loading = false;
     });
   }
 
@@ -86,17 +105,10 @@ class _LoginPanelState extends State<LoginPanel> {
           random));
 
       final keyPair = keyGen.generateKeyPair();
-      final rsaPublicKey = keyPair.publicKey as pointy_castle.RSAPublicKey;
       final rsaPrivateKey = keyPair.privateKey as pointy_castle.RSAPrivateKey;
-
-      final pubKeyWithInfo =
-          ssh_key.RSAPublicKeyWithInfo.fromRSAPublicKey(rsaPublicKey);
       final pvtKeyWithInfo =
           ssh_key.RSAPrivateKeyWithInfo.fromRSAPrivateKey(rsaPrivateKey);
-
       final privateKeyPem = pvtKeyWithInfo.encode(ssh_key.PvtKeyEncoding.pkcs1);
-      final publicKeyOpenSsh =
-          pubKeyWithInfo.encode(ssh_key.PubKeyEncoding.openSsh);
 
       final dir = await getApplicationSupportDirectory();
       final keysDir = Directory('${dir.path}/rosewire_keys');
@@ -106,11 +118,9 @@ class _LoginPanelState extends State<LoginPanel> {
       final filenameBase =
           '${DateTime.now().millisecondsSinceEpoch}_${_newNick.trim().replaceAll(" ", "_")}';
       final keyPath = '${keysDir.path}/$filenameBase.pem';
-      final pubPath = keyPath.replaceAll('.pem', '.pub');
       final nickPath = keyPath.replaceAll('.pem', '.nick');
 
       await File(keyPath).writeAsString(privateKeyPem);
-      await File(pubPath).writeAsString(publicKeyOpenSsh);
       await File(nickPath).writeAsString(_newNick.trim());
 
       setState(() {
@@ -135,6 +145,12 @@ class _LoginPanelState extends State<LoginPanel> {
       return;
     }
 
+    final host = _serverController.text.trim();
+    if (host.isEmpty) {
+      setState(() => _error = "Server address cannot be empty.");
+      return;
+    }
+
     setState(() {
       _loading = true;
       _error = null;
@@ -143,9 +159,7 @@ class _LoginPanelState extends State<LoginPanel> {
     SSHClient? client;
     try {
       final privateKey = await File(_selectedKeyPath!).readAsString();
-
-      // Changed from 'localhost' to '192.168.1.240'
-      final socket = await SSHSocket.connect('192.168.1.240', 2222);
+      final socket = await SSHSocket.connect(host, 2222).timeout(const Duration(seconds: 10));
 
       client = SSHClient(
         socket,
@@ -154,9 +168,12 @@ class _LoginPanelState extends State<LoginPanel> {
       );
 
       await client.authenticated;
-
       client.close();
       await client.done;
+
+      // Save the successful server address for next time
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('rosewire_server', host);
 
       widget.onLogin(_selectedNick!, _selectedKeyPath!);
     } catch (e) {
@@ -164,14 +181,14 @@ class _LoginPanelState extends State<LoginPanel> {
         _error = "Login failed: ${e.toString()}";
         _loading = false;
       });
-      if (client != null) {
-        client.close();
-      }
+      client?.close();
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final fullUserAddress = _selectedNick != null ? '@$_selectedNick@${_serverController.text}' : 'No Profile Selected';
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Center(
@@ -187,9 +204,9 @@ class _LoginPanelState extends State<LoginPanel> {
                 ? Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      CircularProgressIndicator(),
-                      SizedBox(height: 16),
-                      Text("Connecting...", style: TextStyle(color: Colors.white70))
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 16),
+                      Text("Please wait...", style: TextStyle(color: Colors.white70))
                     ],
                   )
                 : Column(
@@ -203,6 +220,15 @@ class _LoginPanelState extends State<LoginPanel> {
                             color: Colors.pinkAccent),
                       ),
                       const SizedBox(height: 24),
+                      TextField(
+                        controller: _serverController,
+                        decoration: const InputDecoration(
+                          labelText: "Instance Address",
+                          hintText: "e.g., rosewire.rosevines.network",
+                        ),
+                        onChanged: (value) => setState(() {}), // Rebuild to update user address display
+                      ),
+                      const SizedBox(height: 16),
                       if (_keyNickPairs.isNotEmpty && !_creatingNew) ...[
                         DropdownButtonFormField<String>(
                           value: _selectedNick,
@@ -223,10 +249,10 @@ class _LoginPanelState extends State<LoginPanel> {
                           decoration:
                               const InputDecoration(labelText: "Select Profile"),
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 24),
                         ElevatedButton.icon(
                           icon: const Icon(Icons.login),
-                          label: const Text("Login"),
+                          label: Text("Login as $fullUserAddress"),
                           onPressed: _loading ? null : _onLoginPressed,
                         ),
                         const SizedBox(height: 16),
@@ -257,7 +283,7 @@ class _LoginPanelState extends State<LoginPanel> {
                         Padding(
                           padding: const EdgeInsets.only(top: 10),
                           child:
-                              Text(_error!, style: TextStyle(color: Colors.redAccent)),
+                              Text(_error!, style: const TextStyle(color: Colors.redAccent)),
                         ),
                     ],
                   ),
