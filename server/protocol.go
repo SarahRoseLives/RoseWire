@@ -87,19 +87,24 @@ type TransferErrorPayload struct {
 
 // --- Server to Server (S2S) Payloads ---
 
-// Activity represents a federated event, inspired by ActivityPub.
 type Activity struct {
-	Type   string          `json:"type"`   // e.g., "Create", "Share"
-	Actor  string          `json:"actor"`  // The federated user address, e.g., "@rose@instance.com"
-	Object json.RawMessage `json:"object"` // The actual content (e.g., a chat message)
+	Type   string          `json:"type"`
+	Actor  string          `json:"actor"`
+	Object json.RawMessage `json:"object"`
 }
 
-// ChatActivityObject is the content of a chat message activity.
 type ChatActivityObject struct {
 	Content string `json:"content"`
 }
 
-// FIX: Add the object for a file sharing activity.
 type ShareActivityObject struct {
 	Files []SharedFile `json:"files"`
+}
+
+// NEW: Add a payload for one server to request a file from another.
+type S2STransferRequest struct {
+	TransferID    string `json:"transferID"`
+	FileName      string `json:"fileName"`
+	FileOwner     string `json:"fileOwner"`     // The full federated name of the user who has the file
+	RequesterPeer string `json:"requesterPeer"` // The full federated name of the user who wants the file
 }

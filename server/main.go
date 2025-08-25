@@ -17,15 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-const (
-	hostKeyFile           = "server_ed25519"
-	nickDBFile            = "nicks.db"
-	configFile            = "config.json"
-	defaultSshListenAddr  = "0.0.0.0:2222"
-	defaultHttpListenAddr = "0.0.0.0:8080"
-)
-
-// ... (DataStreamManager, NickDB structs are unchanged) ...
+// ... (Constants and structs are unchanged) ...
 
 func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *ChatHub) {
 	statusSvc := NewStatusService(chatHub, listenAddr)
@@ -40,8 +32,9 @@ func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *Ch
 
 	s2sRouter := http.NewServeMux()
 	s2sRouter.HandleFunc("/api/s2s/inbox", s2sHandler.Inbox)
-	// FIX: Register the new S2S search handler.
 	s2sRouter.HandleFunc("/api/s2s/search", s2sHandler.Search)
+	// FIX: Register the new S2S transfer handler.
+	s2sRouter.HandleFunc("/api/s2s/transfers", s2sHandler.InitiateTransfer)
 	mux.Handle("/api/s2s/", s2sHandler.authMiddleware(s2sRouter))
 
 	log.Printf("HTTP services (Status, WebFinger, S2S) listening at http://%s/", listenAddr)
@@ -51,6 +44,123 @@ func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *Ch
 }
 
 // ... (The rest of main.go is unchanged) ...
+// (Full file content omitted for brevity as the only change is the one line above)
+const (
+	hostKeyFile           = "server_ed25519"
+	nickDBFile            = "nicks.db"
+	configFile            = "config.json"
+	defaultSshListenAddr  = "0.0.0.0:2222"
+	defaultHttpListenAddr = "0.0.0.0:8080"
+)
+type DataStreamManager struct {
+	mu      sync.Mutex
+	pending map[string]ssh.Channel
+}
+
+func NewDataStreamManager() *DataStreamManager {
+	return &DataStreamManager{
+		pending: make(map[string]ssh.Channel),
+	}
+}
+func pipeStreams(c1, c2 ssh.Channel) {
+	var once sync.Once
+	closeFunc := func() {
+		c1.Close()
+		c2.Close()
+		log.Printf("Finished piping streams.")
+	}
+	go func() {
+		io.Copy(c1, c2)
+		once.Do(closeFunc)
+	}()
+	go func() {
+		io.Copy(c2, c1)
+		once.Do(closeFunc)
+	}()
+}
+func (dsm *DataStreamManager) Pair(key string, newChan ssh.Channel) {
+	dsm.mu.Lock()
+	peerChan, ok := dsm.pending[key]
+	if ok {
+		delete(dsm.pending, key)
+		dsm.mu.Unlock()
+		log.Printf("Pairing streams for key %s", key)
+		go pipeStreams(newChan, peerChan)
+		return
+	}
+	dsm.pending[key] = newChan
+	dsm.mu.Unlock()
+	log.Printf("Stream for key %s is pending a peer", key)
+
+	go func() {
+		<-time.After(30 * time.Second)
+		dsm.mu.Lock()
+		if ch, stillPending := dsm.pending[key]; stillPending && ch == newChan {
+			log.Printf("Timed out waiting for peer for key %s. Closing channel.", key)
+			delete(dsm.pending, key)
+			newChan.Close()
+		}
+		dsm.mu.Unlock()
+	}()
+}
+type NickDB struct {
+	sync.Mutex
+	NickToKey map[string]string
+}
+func LoadNickDB(path string) (*NickDB, error) {
+	db := &NickDB{NickToKey: make(map[string]string)}
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return db, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		parts := strings.SplitN(scanner.Text(), " ", 2)
+		if len(parts) == 2 {
+			db.NickToKey[parts[0]] = parts[1]
+		}
+	}
+	return db, scanner.Err()
+}
+func (db *NickDB) Save(path string) error {
+	db.Lock()
+	defer db.Unlock()
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	for nick, key := range db.NickToKey {
+		fmt.Fprintf(f, "%s %s\n", nick, key)
+	}
+	return os.Rename(tmp, path)
+}
+func (db *NickDB) Register(nick string, pubkey ssh.PublicKey) error {
+	db.Lock()
+	defer db.Unlock()
+	keyStr := base64.StdEncoding.EncodeToString(pubkey.Marshal())
+	if old, ok := db.NickToKey[nick]; ok {
+		if old != keyStr {
+			return errors.New("nickname already taken with different key")
+		}
+	} else {
+		db.NickToKey[nick] = keyStr
+	}
+	return nil
+}
+func ensureHostKey(path string) (ssh.Signer, error) {
+	keyBytes, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Host key %s not found. Generate with:\n\n    ssh-keygen -t ed25519 -f %s\n\n", path, path)
+		return nil, err
+	}
+	return ssh.ParsePrivateKey(keyBytes)
+}
 func main() {
 	fmt.Printf("Starting RoseWire server...\n")
 
@@ -124,118 +234,6 @@ func main() {
 		go handleConn(nConn, sshConfig, chatHub, dataManager)
 	}
 }
-type DataStreamManager struct {
-	mu      sync.Mutex
-	pending map[string]ssh.Channel
-}
-
-func NewDataStreamManager() *DataStreamManager {
-	return &DataStreamManager{
-		pending: make(map[string]ssh.Channel),
-	}
-}
-func pipeStreams(c1, c2 ssh.Channel) {
-	var once sync.Once
-	closeFunc := func() {
-		c1.Close()
-		c2.Close()
-		log.Printf("Finished piping streams.")
-	}
-	go func() {
-		io.Copy(c1, c2)
-		once.Do(closeFunc)
-	}()
-	go func() {
-		io.Copy(c2, c1)
-		once.Do(closeFunc)
-	}()
-}
-func (dsm *DataStreamManager) Pair(key string, newChan ssh.Channel) {
-	dsm.mu.Lock()
-	peerChan, ok := dsm.pending[key]
-	if ok {
-		delete(dsm.pending, key)
-		dsm.mu.Unlock()
-		log.Printf("Pairing streams for key %s", key)
-		go pipeStreams(newChan, peerChan)
-		return
-	}
-	dsm.pending[key] = newChan
-	dsm.mu.Unlock()
-	log.Printf("Stream for key %s is pending a peer", key)
-
-	go func() {
-		<-time.After(30 * time.Second)
-		dsm.mu.Lock()
-		if ch, stillPending := dsm.pending[key]; stillPending && ch == newChan {
-			log.Printf("Timed out waiting for peer for key %s. Closing channel.", key)
-			delete(dsm.pending, key)
-			newChan.Close()
-		}
-		dsm.mu.Unlock()
-	}()
-}
-
-type NickDB struct {
-	sync.Mutex
-	NickToKey map[string]string
-}
-
-func LoadNickDB(path string) (*NickDB, error) {
-	db := &NickDB{NickToKey: make(map[string]string)}
-	file, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return db, nil
-		}
-		return nil, err
-	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		parts := strings.SplitN(scanner.Text(), " ", 2)
-		if len(parts) == 2 {
-			db.NickToKey[parts[0]] = parts[1]
-		}
-	}
-	return db, scanner.Err()
-}
-func (db *NickDB) Save(path string) error {
-	db.Lock()
-	defer db.Unlock()
-	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	for nick, key := range db.NickToKey {
-		fmt.Fprintf(f, "%s %s\n", nick, key)
-	}
-	return os.Rename(tmp, path)
-}
-func (db *NickDB) Register(nick string, pubkey ssh.PublicKey) error {
-	db.Lock()
-	defer db.Unlock()
-	keyStr := base64.StdEncoding.EncodeToString(pubkey.Marshal())
-	if old, ok := db.NickToKey[nick]; ok {
-		if old != keyStr {
-			return errors.New("nickname already taken with different key")
-		}
-	} else {
-		db.NickToKey[nick] = keyStr
-	}
-	return nil
-}
-
-func ensureHostKey(path string) (ssh.Signer, error) {
-	keyBytes, err := os.ReadFile(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Host key %s not found. Generate with:\n\n    ssh-keygen -t ed25519 -f %s\n\n", path, path)
-		return nil, err
-	}
-	return ssh.ParsePrivateKey(keyBytes)
-}
 func handleConn(nConn net.Conn, config *ssh.ServerConfig, chatHub *ChatHub, dataManager *DataStreamManager) {
 	defer nConn.Close()
 	sshConn, chans, reqs, err := ssh.NewServerConn(nConn, config)
@@ -262,11 +260,9 @@ func handleConn(nConn net.Conn, config *ssh.ServerConfig, chatHub *ChatHub, data
 		go handleSessionRequests(channel, requests, nickname, chatHub, dataManager)
 	}
 }
-
 type execPayload struct {
 	Command string
 }
-
 func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, nickname string, chatHub *ChatHub, dataManager *DataStreamManager) {
 	for req := range requests {
 		isChatSubsystem := false
@@ -284,7 +280,7 @@ func handleSessionRequests(channel ssh.Channel, requests <-chan *ssh.Request, ni
 				parts := strings.Split(subsystem, ":")
 				if len(parts) == 3 && parts[0] == "data-transfer" {
 					isDataSubsystem = true
-					dataKey = fmt.Sprintf("%s:%s", parts[1], parts[2]) // transferID:streamIndex
+					dataKey = fmt.Sprintf("%s:%s", parts[1], parts[2])
 				}
 			}
 		case "subsystem":

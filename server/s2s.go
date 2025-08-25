@@ -21,30 +21,24 @@ func NewS2SHandler(cfg *Config, hub *ChatHub) *S2SHandler {
 	}
 }
 
-// authMiddleware protects S2S endpoints using the shared secret.
 func (h *S2SHandler) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Public GET endpoints like /search do not require auth.
 		if r.Method == "GET" {
 			next.ServeHTTP(w, r)
 			return
 		}
-
 		if h.Cfg.SharedSecret == "" {
 			log.Printf("SECURITY WARNING: S2S endpoint accessed but no shared_secret is configured.")
 			http.Error(w, "Endpoint not configured", http.StatusServiceUnavailable)
 			return
 		}
-
 		authHeader := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-
 		if token != h.Cfg.SharedSecret {
 			log.Printf("S2S unauthorized access attempt from %s", r.RemoteAddr)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-
 		next.ServeHTTP(w, r)
 	})
 }
@@ -55,15 +49,12 @@ func (h *S2SHandler) Inbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
 	var activity Activity
 	if err := json.NewDecoder(r.Body).Decode(&activity); err != nil {
 		http.Error(w, "Bad request: could not decode activity", http.StatusBadRequest)
 		return
 	}
-
 	log.Printf("S2S Inbox: Received activity of type '%s' from actor '%s'", activity.Type, activity.Actor)
-
 	switch activity.Type {
 	case "Create":
 		h.handleCreateActivity(activity)
@@ -72,11 +63,58 @@ func (h *S2SHandler) Inbox(w http.ResponseWriter, r *http.Request) {
 	default:
 		log.Printf("S2S Inbox: Received unhandled activity type '%s'", activity.Type)
 	}
-
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// handleCreateActivity processes incoming "Create" activities, like chat messages.
+// NEW: Add a handler to initiate a federated transfer.
+func (h *S2SHandler) InitiateTransfer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req S2STransferRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request: could not decode transfer request", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("S2S Transfer: Received request for %s from %s", req.FileName, req.RequesterPeer)
+
+	// This server now tells its local client (the file owner) to start the upload process.
+	// The unicast will succeed if the user is currently online.
+	ok := h.Hub.unicast("upload_request", UploadRequestPayload{
+		TransferID: req.TransferID,
+		FileName:   req.FileName,
+	}, req.FileOwner)
+
+	if !ok {
+		log.Printf("S2S Transfer: Could not find or message local user %s to start upload.", req.FileOwner)
+		http.Error(w, "File owner is not online on this server.", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("S2S Transfer: Sent 'upload_request' to local user %s.", req.FileOwner)
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *S2SHandler) Search(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	query := r.URL.Query().Get("query")
+	if query == "" {
+		http.Error(w, "Missing 'query' parameter", http.StatusBadRequest)
+		return
+	}
+	results := h.Hub.fileRegistry.Search(query)
+	log.Printf("S2S Search: Found %d results for query '%s' for a peer.", len(results), query)
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(results); err != nil {
+		http.Error(w, "Failed to encode results", http.StatusInternalServerError)
+	}
+}
+
 func (h *S2SHandler) handleCreateActivity(activity Activity) {
 	var chatObj ChatActivityObject
 	if err := json.Unmarshal(activity.Object, &chatObj); err != nil {
@@ -93,7 +131,6 @@ func (h *S2SHandler) handleCreateActivity(activity Activity) {
 	log.Printf("S2S: Relayed federated chat message from %s to local clients.", activity.Actor)
 }
 
-// handleShareActivity processes incoming "Share" activities.
 func (h *S2SHandler) handleShareActivity(activity Activity) {
 	var shareObj ShareActivityObject
 	if err := json.Unmarshal(activity.Object, &shareObj); err != nil {
@@ -102,27 +139,4 @@ func (h *S2SHandler) handleShareActivity(activity Activity) {
 	}
 	h.Hub.fileRegistry.UpdateUserFiles(activity.Actor, shareObj.Files)
 	log.Printf("S2S: Ingested %d shared files from %s into the local registry.", len(shareObj.Files), activity.Actor)
-}
-
-// NEW: Add a handler for S2S search requests.
-func (h *S2SHandler) Search(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	query := r.URL.Query().Get("query")
-	if query == "" {
-		http.Error(w, "Missing 'query' parameter", http.StatusBadRequest)
-		return
-	}
-
-	// Search the local registry for the query.
-	results := h.Hub.fileRegistry.Search(query)
-	log.Printf("S2S Search: Found %d results for query '%s' for a peer.", len(results), query)
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(results); err != nil {
-		http.Error(w, "Failed to encode results", http.StatusInternalServerError)
-	}
 }

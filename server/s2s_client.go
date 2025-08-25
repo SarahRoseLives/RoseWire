@@ -61,9 +61,8 @@ func (c *S2SClient) PushActivity(peerDomain string, activity Activity) error {
 	return nil
 }
 
-// NEW: Add a method to search a peer for files.
+// SearchPeer searches a peer for files.
 func (c *S2SClient) SearchPeer(peerDomain string, query string) ([]SearchResult, error) {
-	// URL-encode the query to handle special characters safely.
 	encodedQuery := url.QueryEscape(query)
 	url := fmt.Sprintf("http://%s/api/s2s/search?query=%s", peerDomain, encodedQuery)
 
@@ -86,9 +85,42 @@ func (c *S2SClient) SearchPeer(peerDomain string, query string) ([]SearchResult,
 
 	var results []SearchResult
 	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return nil, fmt.Errorf("failed to decode search results from %s: %w", peerDomain, err)
+		return nil, fmt.Errorf("failed to decode search results from %s: %w", err)
 	}
 
 	log.Printf("S2S Search: Received %d results from peer %s for query '%s'", len(results), peerDomain, query)
 	return results, nil
+}
+
+// RequestTransfer sends a request to a peer to initiate a file transfer.
+func (c *S2SClient) RequestTransfer(peerDomain string, transferReq S2STransferRequest) error {
+	url := fmt.Sprintf("http://%s/api/s2s/transfers", peerDomain)
+
+	body, err := json.Marshal(transferReq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal transfer request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("failed to create transfer request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.sharedSecret != "" {
+		req.Header.Set("Authorization", "Bearer "+c.sharedSecret)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send transfer request to %s: %w", peerDomain, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("peer %s did not accept transfer request, status: %s", peerDomain, resp.Status)
+	}
+
+	log.Printf("S2S Transfer: Peer %s accepted transfer request %s.", peerDomain, transferReq.TransferID)
+	return nil
 }
