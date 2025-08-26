@@ -1,1 +1,0 @@
-Place files and folders you want to share in this directory.

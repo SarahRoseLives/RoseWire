@@ -1,6 +1,0 @@
-{
-  "domain": "71.66.228.42",
-  "ssh_listen_addr": "0.0.0.0:2222",
-  "http_listen_addr": "0.0.0.0:8080",
-  "peers": ["rosewire.rosevines.network:8080"]
-}
