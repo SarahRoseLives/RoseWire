@@ -1,11 +1,16 @@
+// CLIENT/services/ssh_chat_service.dart
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:http/http.dart' as http;
 import 'package:dartssh2/dartssh2.dart';
 import 'ssh_file_service.dart';
 import '../models/search_result.dart';
 
 class SshChatService {
+  // Add the client's current version
+  static const String clientVersion = "1.0.0";
+
   // Host is now nullable, it will be set before connect() is called.
   String? _host;
   int _port;
@@ -20,10 +25,14 @@ class SshChatService {
   final _searchResultController = StreamController<List<SearchResult>>.broadcast();
   final _transferController = StreamController<List<Transfer>>.broadcast();
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
+  // Add a new controller for version status
+  final _versionStatusController = StreamController<String>.broadcast();
 
   Stream<List<SearchResult>> get searchResults => _searchResultController.stream;
   Stream<List<Transfer>> get transfers => _transferController.stream;
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
+  // Expose the version status stream
+  Stream<String> get versionStatus => _versionStatusController.stream;
 
   // Constructor no longer sets a default host
   SshChatService({int port = 2222}) : _port = port;
@@ -42,6 +51,30 @@ class SshChatService {
 
   String? get host => _host;
   int get port => _port;
+  
+  Future<void> _checkServerVersion(String host) async {
+    try {
+        final uri = Uri.parse('http://$host:8080/api/version');
+        final response = await http.get(uri).timeout(const Duration(seconds: 5));
+
+        if (response.statusCode == 200) {
+            final data = json.decode(response.body);
+            final serverVersion = data['version'] as String?;
+            if (serverVersion != null) {
+                if (serverVersion != clientVersion) {
+                    _versionStatusController.add("Warning: Server is running version $serverVersion, but client expects $clientVersion. Some features may not work correctly.");
+                } else {
+                    _versionStatusController.add("Server version is up-to-date.");
+                }
+            }
+        } else {
+             _versionStatusController.add("Warning: Could not verify server version. It may be outdated.");
+        }
+    } catch (e) {
+        _versionStatusController.add("Warning: Could not verify server version. It may be outdated.");
+        print("Version check failed: $e");
+    }
+  }
 
   Future<void> connect({
       required String nickname,
@@ -51,6 +84,9 @@ class SshChatService {
       _nickname = nickname;
       _host = host; // Set the host for this connection
       if (_client?.isClosed == false) return;
+
+      // --- Add this line ---
+      unawaited(_checkServerVersion(host));
 
       if (_host == null) {
           final errorMessage = "[System] Connection failed: Hostname not set.";
@@ -176,5 +212,6 @@ class SshChatService {
       _searchResultController.close();
       _transferController.close();
       _messageController.close();
+      _versionStatusController.close();
   }
 }

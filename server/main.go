@@ -1,3 +1,4 @@
+// SERVER/main.go
 package main
 
 import (
@@ -33,6 +34,8 @@ const (
 	configFile          = "config.json"
 	defaultSshListenAddr  = "0.0.0.0:2222"
 	defaultHttpListenAddr = "0.0.0.0:8080"
+	// --- MODIFICATION: Hardcode the server version ---
+	serverVersion = "1.0.0"
 )
 
 type DataStreamManager struct {
@@ -290,6 +293,11 @@ func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *Ch
 	router.Handle("/", statusSvc)
 	router.Handle("/api/status", statusSvc)
 	router.Handle("/.well-known/webfinger", webfingerHandler)
+	// --- MODIFICATION: Add version endpoint ---
+	router.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"version": serverVersion})
+	}).Methods("GET")
 
 	// Admin routes
 	router.HandleFunc("/admin", adminHandler.ServeAdminPanel).Methods("GET")
@@ -385,7 +393,6 @@ func main() {
 				return nil, fmt.Errorf("invalid nickname format; must not be empty or contain '@'")
 			}
 
-			// --- START FIX: Check for banned users ---
 			adminCfg.mu.RLock()
 			isBanned := false
 			for _, bannedUser := range adminCfg.BannedUsers {
@@ -400,7 +407,6 @@ func main() {
 				log.Printf("Connection rejected for banned user: %s", nick)
 				return nil, errors.New("this account has been suspended")
 			}
-			// --- END FIX ---
 
 			err := nickDB.Register(nick, pubKey)
 			if err != nil {

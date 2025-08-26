@@ -1,3 +1,5 @@
+// CLIENT/ui/app/rosewire_app.dart
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -26,9 +28,23 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
   String? _keyPath;
   int _selectedTab = 3;
   String? _libraryPath;
-  String _serverHost = 'rosewire.rosevines.network'; // Store the current host
+  String _serverHost = 'rosewire.rosevines.network';
+
+  // --- START MODIFICATION ---
+  String? _versionWarning;
+  StreamSubscription? _versionSubscription;
+  // --- END MODIFICATION ---
 
   late final SshChatService _chatService = SshChatService();
+
+  @override
+  void dispose() {
+    // --- START MODIFICATION: Clean up subscription and service ---
+    _versionSubscription?.cancel();
+    _chatService.dispose();
+    // --- END MODIFICATION ---
+    super.dispose();
+  }
 
   void _onLogin(String nickname, String keyPath) {
     setState(() {
@@ -45,6 +61,21 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
   }
 
   Future<void> _initializeServicesAfterLogin(String nickname, String keyPath) async {
+    // --- START MODIFICATION: Listen for version status updates ---
+    _versionSubscription = _chatService.versionStatus.listen((status) {
+      if (status.startsWith("Warning:") && mounted) {
+        setState(() {
+          _versionWarning = status;
+        });
+      } else if (mounted) {
+        // Clear warning if server is okay
+        setState(() {
+          _versionWarning = null;
+        });
+      }
+    });
+    // --- END MODIFICATION ---
+
     final prefs = await SharedPreferences.getInstance();
     _serverHost = prefs.getString('rosewire_server') ?? 'rosewire.rosevines.network';
 
@@ -126,6 +157,31 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
     ];
   }
 
+  // --- START MODIFICATION: Helper for building the warning banner ---
+  PreferredSizeWidget? _buildVersionWarningBanner() {
+    if (_versionWarning == null) {
+      return null;
+    }
+    return PreferredSize(
+      preferredSize: const Size.fromHeight(48.0),
+      child: Container(
+        color: Colors.orange[800],
+        padding: const EdgeInsets.all(8.0),
+        child: Center(
+          child: Text(
+            _versionWarning!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+  // --- END MODIFICATION ---
+
   @override
   Widget build(BuildContext context) {
     if (!_loggedIn) {
@@ -140,6 +196,9 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
           fontSize: 20,
           fontWeight: FontWeight.bold,
         ),
+        // --- START MODIFICATION: Add the banner to the AppBar ---
+        bottom: _buildVersionWarningBanner(),
+        // --- END MODIFICATION ---
       ),
       body: IndexedStack(
         index: _selectedTab,

@@ -1,3 +1,4 @@
+// CLIENT/ui/desktop/rosewire_desktop.dart
 import 'dart:io';
 import 'dart:convert';
 import 'dart:ui';
@@ -38,6 +39,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
   String? _libraryFolder;
   List<File> _libraryFiles = [];
   String _serverHost = 'rosewire.rosevines.network'; // Store the current host
+  String? _versionWarning;
 
   late List<Widget> _panels = []; // Initialize as empty
 
@@ -45,7 +47,15 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
   void initState() {
     super.initState();
     _sshChatService = SshChatService();
-    // Initialize with dummy panels first
+
+    _sshChatService.versionStatus.listen((status) {
+        if (status.startsWith("Warning:") && mounted) {
+            setState(() {
+                _versionWarning = status;
+            });
+        }
+    });
+
     _buildPanels();
     _initializeConnection();
   }
@@ -236,13 +246,23 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
                             _RoseWireHeader(
                               nickname: widget.nickname,
                             ),
+                            if (_versionWarning != null)
+                              Container(
+                                color: Colors.orange[800],
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                child: Text(
+                                  _versionWarning!,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                ),
+                              ),
                             Expanded(
                               child: _panels.isEmpty
-                                ? Center(child: CircularProgressIndicator())
-                                : IndexedStack(
-                                index: _selectedPanelIndex,
-                                children: _panels,
-                              ),
+                                  ? Center(child: CircularProgressIndicator())
+                                  : IndexedStack(
+                                      index: _selectedPanelIndex,
+                                      children: _panels,
+                                    ),
                             ),
                             _RoseWireStatusBar(nickname: widget.nickname),
                           ],
