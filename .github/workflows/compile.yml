@@ -29,16 +29,26 @@ jobs:
         run: |
           cp server/config_example.json config.json
 
-      # Setup Flutter
+      # Setup Flutter (latest stable with Dart >=3.8.1)
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.1'
+          channel: stable
+
+      # Upgrade Flutter & Dart
+      - name: Upgrade Flutter
+        run: |
+          flutter upgrade
+
+      # Confirm Dart version (for logging)
+      - name: Show Dart version
+        run: dart --version
 
       # Build Flutter APK
       - name: Build Flutter APK (Android)
         run: |
           cd rosewire
+          flutter pub get
           flutter build apk --release
           cp build/app/outputs/flutter-apk/app-release.apk ../rosewire-client.apk
 
@@ -48,6 +58,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev
           cd rosewire
+          flutter pub get
           flutter build linux --release
           cp build/linux/x64/release/bundle/rosewire ../rosewire-client
 
@@ -90,16 +101,26 @@ jobs:
         run: |
           copy server\config_example.json config.json
 
-      # Setup Flutter
+      # Setup Flutter (latest stable with Dart >=3.8.1)
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.1'
+          channel: stable
+
+      # Upgrade Flutter & Dart
+      - name: Upgrade Flutter
+        run: |
+          flutter upgrade
+
+      # Confirm Dart version (for logging)
+      - name: Show Dart version
+        run: dart --version
 
       # Build Flutter Desktop (Windows)
       - name: Build Flutter Desktop (Windows)
         run: |
           cd rosewire
+          flutter pub get
           flutter build windows --release
           copy build\windows\runner\Release\rosewire.exe ..\rosewire-client.exe
 
