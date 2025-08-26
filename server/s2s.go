@@ -21,15 +21,17 @@ type S2SHandler struct {
 	Cfg         *Config
 	Hub         *ChatHub
 	DataManager *DataStreamManager
-	S2SClient   *S2SClient // Added for fetching peer keys
+	S2SClient   *S2SClient
+	AdminConfig *AdminConfig // Added admin config
 }
 
-func NewS2SHandler(cfg *Config, hub *ChatHub, dataManager *DataStreamManager, s2sClient *S2SClient) *S2SHandler {
+func NewS2SHandler(cfg *Config, hub *ChatHub, dataManager *DataStreamManager, s2sClient *S2SClient, adminCfg *AdminConfig) *S2SHandler {
 	return &S2SHandler{
 		Cfg:         cfg,
 		Hub:         hub,
 		DataManager: dataManager,
 		S2SClient:   s2sClient,
+		AdminConfig: adminCfg, // Initialize admin config
 	}
 }
 
@@ -41,10 +43,28 @@ func (h *S2SHandler) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		identity := r.Header.Get("X-RoseWire-Identity")
+		// --- START FIX: Check for blocked peers ---
+		h.AdminConfig.mu.RLock()
+		isBlocked := false
+		for _, blockedPeer := range h.AdminConfig.BlockedPeers {
+			if blockedPeer == identity {
+				isBlocked = true
+				break
+			}
+		}
+		h.AdminConfig.mu.RUnlock()
+
+		if isBlocked {
+			log.Printf("S2S connection from blocked peer %s rejected.", identity)
+			http.Error(w, "Forbidden: This peer is blocked by the instance administrator.", http.StatusForbidden)
+			return
+		}
+		// --- END FIX ---
+
 		// For streaming data, we only check the identity header for now.
-		// A more advanced implementation would use chunked signing.
 		if strings.HasPrefix(r.URL.Path, "/api/s2s/data/") {
-			if r.Header.Get("X-RoseWire-Identity") == "" {
+			if identity == "" {
 				http.Error(w, "Unauthorized: Missing identity header", http.StatusUnauthorized)
 				return
 			}
@@ -52,7 +72,6 @@ func (h *S2SHandler) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		identity := r.Header.Get("X-RoseWire-Identity")
 		signatureB64 := r.Header.Get("X-RoseWire-Signature")
 
 		if identity == "" || signatureB64 == "" {
@@ -68,17 +87,14 @@ func (h *S2SHandler) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Read the body, which is required for signature verification.
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			log.Printf("S2S error: Could not read body for verification from %s: %v", r.RemoteAddr, err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
-		// VERY IMPORTANT: Put the body back so the actual handler can read it.
 		r.Body = io.NopCloser(bytes.NewBuffer(body))
 
-		// Find the full peer address (host:port) to fetch the key
 		var peerAddress string
 		for _, p := range h.Cfg.Peers {
 			if strings.HasPrefix(p, identity) {

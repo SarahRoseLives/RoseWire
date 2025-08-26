@@ -4,7 +4,12 @@ go 1.24.0
 
 require (
 	github.com/gorilla/mux v1.8.1
+	github.com/gorilla/sessions v1.4.0
 	golang.org/x/crypto v0.40.0
+	golang.org/x/term v0.33.0
 )
 
-require golang.org/x/sys v0.34.0 // indirect
+require (
+	github.com/gorilla/securecookie v1.1.2 // indirect
+	golang.org/x/sys v0.34.0 // indirect
+)

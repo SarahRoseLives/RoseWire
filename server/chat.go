@@ -36,6 +36,7 @@ type ChatHub struct {
 	totalTransfers     int
 	config             *Config
 	s2sClient          *S2SClient
+	adminConfig        *AdminConfig // Added admin config
 }
 
 type ChatClient struct {
@@ -49,13 +50,14 @@ type ChatClient struct {
 	once          sync.Once
 }
 
-func NewChatHub(registry *FileRegistry, config *Config, s2sClient *S2SClient) *ChatHub {
+func NewChatHub(registry *FileRegistry, config *Config, s2sClient *S2SClient, adminConfig *AdminConfig) *ChatHub {
 	return &ChatHub{
 		clients:      make(map[string]*ChatClient),
 		fileRegistry: registry,
 		transfers:    make(map[string]*TransferInfo),
 		config:       config,
 		s2sClient:    s2sClient,
+		adminConfig:  adminConfig, // Initialize admin config
 	}
 }
 
@@ -64,12 +66,24 @@ func (hub *ChatHub) federateActivity(activity Activity) {
 		return
 	}
 
+	hub.adminConfig.mu.RLock()
+	blockedPeers := make(map[string]bool)
+	for _, p := range hub.adminConfig.BlockedPeers {
+		blockedPeers[p] = true
+	}
+	hub.adminConfig.mu.RUnlock()
+
 	log.Printf("Federating activity type '%s' from '%s' to %d peers.", activity.Type, activity.Actor, len(hub.config.Peers))
 	for _, peer := range hub.config.Peers {
-		go func(peerDomain string) {
-			err := hub.s2sClient.PushActivity(peerDomain, activity)
+		peerDomain := strings.Split(peer, ":")[0]
+		if blockedPeers[peerDomain] {
+			log.Printf("Federation: Skipping blocked peer %s", peerDomain)
+			continue
+		}
+		go func(peerAddress string) {
+			err := hub.s2sClient.PushActivity(peerAddress, activity)
 			if err != nil {
-				log.Printf("Failed to federate to peer %s: %v", peerDomain, err)
+				log.Printf("Failed to federate to peer %s: %v", peerAddress, err)
 			}
 		}(peer)
 	}
@@ -80,8 +94,32 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 	case "share":
 		var p SharePayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			c.fileRegistry.UpdateUserFiles(c.federatedName, p.Files)
-			shareObject, _ := json.Marshal(ShareActivityObject{Files: p.Files})
+			// --- START FIX: Filter out blocked file types ---
+			c.hub.adminConfig.mu.RLock()
+			blockedExts := make(map[string]bool)
+			for _, ext := range c.hub.adminConfig.BlockedFileTypes {
+				blockedExts[ext] = true
+			}
+			c.hub.adminConfig.mu.RUnlock()
+
+			var allowedFiles []SharedFile
+			for _, file := range p.Files {
+				isBlocked := false
+				for ext := range blockedExts {
+					if strings.HasSuffix(strings.ToLower(file.Name), ext) {
+						log.Printf("SHARE BLOCKED: User '%s' tried to share blocked filetype: %s", c.federatedName, file.Name)
+						isBlocked = true
+						break
+					}
+				}
+				if !isBlocked {
+					allowedFiles = append(allowedFiles, file)
+				}
+			}
+
+			c.fileRegistry.UpdateUserFiles(c.federatedName, allowedFiles)
+			shareObject, _ := json.Marshal(ShareActivityObject{Files: allowedFiles})
+			// --- END FIX ---
 			activity := Activity{
 				Type:   "Share",
 				Actor:  c.federatedName,
@@ -105,13 +143,25 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 				}
 			}()
 
+			c.hub.adminConfig.mu.RLock()
+			blockedPeers := make(map[string]bool)
+			for _, peer := range c.hub.adminConfig.BlockedPeers {
+				blockedPeers[peer] = true
+			}
+			c.hub.adminConfig.mu.RUnlock()
+
 			for _, peer := range c.hub.config.Peers {
 				wg.Add(1)
-				go func(peerDomain string) {
+				go func(peerAddress string) {
 					defer wg.Done()
-					peerResults, err := c.hub.s2sClient.SearchPeer(peerDomain, p.Query)
+					peerDomain := strings.Split(peerAddress, ":")[0]
+					if blockedPeers[peerDomain] {
+						log.Printf("SEARCH: Skipping blocked peer %s", peerDomain)
+						return
+					}
+					peerResults, err := c.hub.s2sClient.SearchPeer(peerAddress, p.Query)
 					if err != nil {
-						log.Printf("Error searching peer %s: %v", peerDomain, err)
+						log.Printf("Error searching peer %s: %v", peerAddress, err)
 						return
 					}
 					if len(peerResults) > 0 {
@@ -230,6 +280,24 @@ func domainFromFederatedName(name string) (string, bool) {
 }
 
 func (c *ChatClient) initiateFileTransfer(filename, peer string) {
+	// --- START FIX: Check for blocked filetypes on download ---
+	c.hub.adminConfig.mu.RLock()
+	isBlocked := false
+	for _, ext := range c.hub.adminConfig.BlockedFileTypes {
+		if strings.HasSuffix(strings.ToLower(filename), ext) {
+			isBlocked = true
+			break
+		}
+	}
+	c.hub.adminConfig.mu.RUnlock()
+
+	if isBlocked {
+		log.Printf("DOWNLOAD BLOCKED: User '%s' tried to download blocked filetype: %s", c.federatedName, filename)
+		c.send("transfer_error", TransferErrorPayload{Message: "This file type is blocked by the server administrator."})
+		return
+	}
+	// --- END FIX ---
+
 	if peer == c.federatedName {
 		c.send("transfer_error", TransferErrorPayload{Message: "You cannot download your own file."})
 		return
@@ -459,10 +527,7 @@ func (c *ChatClient) relayTransferMessage(msgType string, payload interface{}, t
 	transfer, ok := c.hub.transfers[transferID]
 	c.hub.mu.Unlock()
 	if !ok {
-		// --- START FIX ---
-		// The undefined 'err' variable has been removed from this log statement.
 		log.Printf("SECURITY: Received data for unknown transfer ID '%s' from %s", transferID, c.federatedName)
-		// --- END FIX ---
 		return
 	}
 	if transfer.FromUser != c.federatedName {

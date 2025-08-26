@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	mrand "math/rand" // Use a named import 'mrand' to avoid collision with 'crypto/rand'
+	mrand "math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -22,14 +22,15 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/gorilla/sessions"
 	"golang.org/x/crypto/ssh"
 )
 
 const (
-	hostKeyFile           = "server_ed25519"
-	instanceKeyFile       = "instance_key.pem"
-	nickDBFile            = "nicks.db"
-	configFile            = "config.json"
+	hostKeyFile         = "server_ed25519"
+	instanceKeyFile     = "instance_key.pem"
+	nickDBFile          = "nicks.db"
+	configFile          = "config.json"
 	defaultSshListenAddr  = "0.0.0.0:2222"
 	defaultHttpListenAddr = "0.0.0.0:8080"
 )
@@ -203,13 +204,29 @@ func startGossipProtocol(hub *ChatHub) {
 
 func gossip(hub *ChatHub) {
 	hub.mu.Lock()
-	if len(hub.config.Peers) == 0 {
+	hub.adminConfig.mu.RLock()
+
+	// Filter out blocked peers before selecting one to gossip with
+	allowedPeers := []string{}
+	blockedMap := make(map[string]bool)
+	for _, p := range hub.adminConfig.BlockedPeers {
+		blockedMap[p] = true
+	}
+	for _, p := range hub.config.Peers {
+		domain := strings.Split(p, ":")[0]
+		if !blockedMap[domain] {
+			allowedPeers = append(allowedPeers, p)
+		}
+	}
+	hub.adminConfig.mu.RUnlock()
+
+	if len(allowedPeers) == 0 {
 		hub.mu.Unlock()
-		log.Println("Gossip: No peers to gossip with.")
+		log.Println("Gossip: No non-blocked peers to gossip with.")
 		return
 	}
-	// Use the aliased 'mrand' to select a random peer
-	targetPeer := hub.config.Peers[mrand.Intn(len(hub.config.Peers))]
+
+	targetPeer := allowedPeers[mrand.Intn(len(allowedPeers))]
 	hub.mu.Unlock()
 
 	log.Printf("Gossip: Gossiping with peer %s", targetPeer)
@@ -221,6 +238,8 @@ func gossip(hub *ChatHub) {
 
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
+	hub.adminConfig.mu.RLock()
+	defer hub.adminConfig.mu.RUnlock()
 
 	listenPort := strings.Split(hub.config.HttpListenAddr, ":")[1]
 	selfAddress := fmt.Sprintf("%s:%s", hub.config.Domain, listenPort)
@@ -231,7 +250,8 @@ func gossip(hub *ChatHub) {
 	}
 
 	for _, discoveredPeer := range discoveredPeers {
-		if discoveredPeer != selfAddress && !existingPeers[discoveredPeer] {
+		discoveredDomain := strings.Split(discoveredPeer, ":")[0]
+		if discoveredPeer != selfAddress && !existingPeers[discoveredPeer] && !blockedMap[discoveredDomain] {
 			log.Printf("Gossip: Discovered new peer: %s", discoveredPeer)
 			hub.config.Peers = append(hub.config.Peers, discoveredPeer)
 			existingPeers[discoveredPeer] = true
@@ -239,10 +259,11 @@ func gossip(hub *ChatHub) {
 	}
 }
 
-func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *ChatHub, dataManager *DataStreamManager, instanceSigner crypto.Signer) {
+func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *ChatHub, dataManager *DataStreamManager, instanceSigner crypto.Signer, adminCfg *AdminConfig, store *sessions.CookieStore) {
 	statusSvc := NewStatusService(chatHub, listenAddr)
 	webfingerHandler := &WebFingerHandler{Cfg: cfg, NickDB: nickDB}
-	s2sHandler := NewS2SHandler(cfg, chatHub, dataManager, chatHub.s2sClient)
+	s2sHandler := NewS2SHandler(cfg, chatHub, dataManager, chatHub.s2sClient, adminCfg)
+	adminHandler := NewAdminHandler(store, adminCfg, chatHub)
 
 	router := mux.NewRouter()
 
@@ -265,10 +286,23 @@ func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *Ch
 		json.NewEncoder(w).Encode(actor)
 	}).Methods("GET")
 
+	// Public routes
 	router.Handle("/", statusSvc)
 	router.Handle("/api/status", statusSvc)
 	router.Handle("/.well-known/webfinger", webfingerHandler)
 
+	// Admin routes
+	router.HandleFunc("/admin", adminHandler.ServeAdminPanel).Methods("GET")
+	router.HandleFunc("/admin/login", adminHandler.HandleLogin).Methods("POST")
+	router.HandleFunc("/admin/logout", adminHandler.HandleLogout).Methods("POST")
+
+	// Admin API routes (require session auth)
+	adminAPIRouter := router.PathPrefix("/api/admin").Subrouter()
+	adminAPIRouter.Use(adminHandler.AuthMiddleware)
+	adminAPIRouter.HandleFunc("/config", adminHandler.HandleGetConfig).Methods("GET")
+	adminAPIRouter.HandleFunc("/update", adminHandler.HandleUpdateConfig).Methods("POST")
+
+	// S2S routes
 	s2sRouter := router.PathPrefix("/api/s2s").Subrouter()
 	s2sRouter.Use(s2sHandler.authMiddleware)
 	s2sRouter.HandleFunc("/inbox", s2sHandler.Inbox).Methods("POST")
@@ -277,16 +311,14 @@ func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *Ch
 	s2sRouter.HandleFunc("/data/{tid}/{idx}", s2sHandler.RelayData).Methods("POST")
 	s2sRouter.HandleFunc("/peers", s2sHandler.Peers).Methods("GET")
 
-	log.Printf("HTTP services (Status, WebFinger, S2S) listening at http://%s/", listenAddr)
+	log.Printf("HTTP services (Status, WebFinger, S2S, Admin) listening at http://%s/", listenAddr)
 	if err := http.ListenAndServe(listenAddr, router); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
 }
 
 func main() {
-	// Seed the math/rand package once at startup
 	mrand.Seed(time.Now().UnixNano())
-
 	fmt.Printf("Starting RoseWire server...\n")
 
 	cfg, err := LoadConfig(configFile)
@@ -294,6 +326,17 @@ func main() {
 		log.Fatalf("Failed to load %s: %v. Please create it.", configFile, err)
 	}
 	log.Printf("Server domain configured as: %s", cfg.Domain)
+
+	adminCfg, err := LoadAdminConfig(adminConfigFile)
+	if err != nil {
+		log.Fatalf("Failed to load admin config: %v", err)
+	}
+
+	if adminCfg.PasswordHash == "" {
+		if err := SetupAdminPassword(adminCfg); err != nil {
+			log.Fatalf("Admin password setup failed: %v", err)
+		}
+	}
 
 	instanceSigner, err := ensureInstanceKey(instanceKeyFile)
 	if err != nil {
@@ -312,8 +355,15 @@ func main() {
 
 	fileRegistry := NewFileRegistry()
 	s2sClient := NewS2SClient(instanceSigner, cfg.Domain)
-	chatHub := NewChatHub(fileRegistry, cfg, s2sClient)
+	chatHub := NewChatHub(fileRegistry, cfg, s2sClient, adminCfg)
 	dataManager := NewDataStreamManager()
+
+	sessionKey := make([]byte, 32)
+	_, err = rand.Read(sessionKey)
+	if err != nil {
+		log.Fatalf("Could not generate session key: %v", err)
+	}
+	sessionStore := sessions.NewCookieStore(sessionKey)
 
 	go startGossipProtocol(chatHub)
 
@@ -321,7 +371,7 @@ func main() {
 	if httpAddr == "" {
 		httpAddr = defaultHttpListenAddr
 	}
-	go startHttpServer(httpAddr, cfg, nickDB, chatHub, dataManager, instanceSigner)
+	go startHttpServer(httpAddr, cfg, nickDB, chatHub, dataManager, instanceSigner, adminCfg, sessionStore)
 
 	sshAddr := cfg.SshListenAddr
 	if sshAddr == "" {
@@ -334,6 +384,24 @@ func main() {
 			if nick == "" || strings.Contains(nick, "@") {
 				return nil, fmt.Errorf("invalid nickname format; must not be empty or contain '@'")
 			}
+
+			// --- START FIX: Check for banned users ---
+			adminCfg.mu.RLock()
+			isBanned := false
+			for _, bannedUser := range adminCfg.BannedUsers {
+				if bannedUser == nick {
+					isBanned = true
+					break
+				}
+			}
+			adminCfg.mu.RUnlock()
+
+			if isBanned {
+				log.Printf("Connection rejected for banned user: %s", nick)
+				return nil, errors.New("this account has been suspended")
+			}
+			// --- END FIX ---
+
 			err := nickDB.Register(nick, pubKey)
 			if err != nil {
 				return nil, err
