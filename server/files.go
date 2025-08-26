@@ -1,4 +1,4 @@
-// files.go
+// SERVER/files.go
 package main
 
 import (
@@ -77,19 +77,53 @@ func (r *FileRegistry) VerifyFileOwner(filename, owner string) bool {
 }
 
 // Search finds files matching the query across all online users.
-func (r *FileRegistry) Search(query string) []SearchResult {
+// It excludes files owned by the requester.
+// If the query is a federated username, it returns all files for that user.
+func (r *FileRegistry) Search(query string, requester string) []SearchResult {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	var results []SearchResult
-	query = strings.ToLower(strings.TrimSpace(query))
-	if query == "" {
+	trimmedQuery := strings.TrimSpace(query)
+
+	// --- START MODIFICATION: Handle federated username search ---
+	if strings.HasPrefix(trimmedQuery, "@") && strings.Count(trimmedQuery, "@") == 2 {
+		targetUser := trimmedQuery
+		if targetUser == requester {
+			return results // Don't return results if a user searches for themselves.
+		}
+
+		userFiles, ok := r.files[targetUser]
+		if ok {
+			for _, file := range userFiles {
+				if !file.IsDir {
+					results = append(results, SearchResult{
+						FileName: file.Name,
+						Size:     file.Size,
+						Peer:     targetUser,
+					})
+				}
+			}
+		}
+		log.Printf("Direct user search for '%s' returned %d local results.", query, len(results))
+		return results
+	}
+	// --- END MODIFICATION ---
+
+	lowerQuery := strings.ToLower(trimmedQuery)
+	if lowerQuery == "" {
 		return results
 	}
 
 	for nickname, files := range r.files {
+		// --- START MODIFICATION: Don't show users their own files in search results ---
+		if nickname == requester {
+			continue
+		}
+		// --- END MODIFICATION ---
+
 		for _, file := range files {
-			if !file.IsDir && strings.Contains(strings.ToLower(file.Name), query) {
+			if !file.IsDir && strings.Contains(strings.ToLower(file.Name), lowerQuery) {
 				results = append(results, SearchResult{
 					FileName: file.Name,
 					Size:     file.Size,
@@ -98,7 +132,7 @@ func (r *FileRegistry) Search(query string) []SearchResult {
 			}
 		}
 	}
-	log.Printf("Search for '%s' returned %d results.", query, len(results))
+	log.Printf("Keyword search for '%s' by '%s' returned %d results.", query, requester, len(results))
 	return results
 }
 

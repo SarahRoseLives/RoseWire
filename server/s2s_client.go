@@ -1,3 +1,4 @@
+// SERVER/s2s_client.go
 package main
 
 import (
@@ -130,9 +131,14 @@ func (c *S2SClient) PushActivity(peerAddress string, activity Activity) error {
 }
 
 // SearchPeer searches a peer for files (no signing needed for GET).
-func (c *S2SClient) SearchPeer(peerAddress string, query string) ([]SearchResult, error) {
+// --- START MODIFICATION: Add requester parameter ---
+func (c *S2SClient) SearchPeer(peerAddress string, query string, requester string) ([]SearchResult, error) {
+	// --- END MODIFICATION ---
 	encodedQuery := url.QueryEscape(query)
-	url := fmt.Sprintf("http://%s/api/s2s/search?query=%s", peerAddress, encodedQuery)
+	// --- START MODIFICATION: Add requester to URL ---
+	encodedRequester := url.QueryEscape(requester)
+	url := fmt.Sprintf("http://%s/api/s2s/search?query=%s&requester=%s", peerAddress, encodedQuery, encodedRequester)
+	// --- END MODIFICATION ---
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {

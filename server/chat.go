@@ -1,3 +1,4 @@
+// SERVER/chat.go
 package main
 
 import (
@@ -94,7 +95,6 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 	case "share":
 		var p SharePayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
-			// --- START FIX: Filter out blocked file types ---
 			c.hub.adminConfig.mu.RLock()
 			blockedExts := make(map[string]bool)
 			for _, ext := range c.hub.adminConfig.BlockedFileTypes {
@@ -119,7 +119,6 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 
 			c.fileRegistry.UpdateUserFiles(c.federatedName, allowedFiles)
 			shareObject, _ := json.Marshal(ShareActivityObject{Files: allowedFiles})
-			// --- END FIX ---
 			activity := Activity{
 				Type:   "Share",
 				Actor:  c.federatedName,
@@ -137,7 +136,7 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				localResults := c.fileRegistry.Search(p.Query)
+				localResults := c.fileRegistry.Search(p.Query, c.federatedName)
 				if len(localResults) > 0 {
 					resultsChan <- localResults
 				}
@@ -159,7 +158,7 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 						log.Printf("SEARCH: Skipping blocked peer %s", peerDomain)
 						return
 					}
-					peerResults, err := c.hub.s2sClient.SearchPeer(peerAddress, p.Query)
+					peerResults, err := c.hub.s2sClient.SearchPeer(peerAddress, p.Query, c.federatedName)
 					if err != nil {
 						log.Printf("Error searching peer %s: %v", peerAddress, err)
 						return
@@ -280,7 +279,6 @@ func domainFromFederatedName(name string) (string, bool) {
 }
 
 func (c *ChatClient) initiateFileTransfer(filename, peer string) {
-	// --- START FIX: Check for blocked filetypes on download ---
 	c.hub.adminConfig.mu.RLock()
 	isBlocked := false
 	for _, ext := range c.hub.adminConfig.BlockedFileTypes {
@@ -296,7 +294,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 		c.send("transfer_error", TransferErrorPayload{Message: "This file type is blocked by the server administrator."})
 		return
 	}
-	// --- END FIX ---
 
 	if peer == c.federatedName {
 		c.send("transfer_error", TransferErrorPayload{Message: "You cannot download your own file."})
@@ -317,19 +314,21 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 		return
 	}
 
-	c.send("transfer_start", TransferStartPayload{
-		TransferID: transferID,
-		FileName:   filename,
-		Size:       fileInfo.Size,
-		FromUser:   peer,
-	})
-
+	// --- START MODIFICATION: Logic for remote and local transfers is now different ---
 	if isRemote {
 		peerDomain, ok := domainFromFederatedName(peer)
 		if !ok {
 			c.send("transfer_error", TransferErrorPayload{TransferID: transferID, Message: "Invalid peer address format."})
 			return
 		}
+
+		// First, tell the downloader that a transfer is starting.
+		c.send("transfer_start", TransferStartPayload{
+			TransferID: transferID,
+			FileName:   filename,
+			Size:       fileInfo.Size,
+			FromUser:   peer,
+		})
 
 		fullPeerAddress := peerDomain
 		for _, p := range c.hub.config.Peers {
@@ -360,6 +359,25 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 		}()
 
 	} else {
+		// For local transfers, first try to contact the uploader.
+		log.Printf("Local Transfer %s initiated: %s wants '%s' from %s", transferID, c.federatedName, filename, peer)
+
+		ok := c.hub.unicast("upload_request", UploadRequestPayload{
+			TransferID: transferID,
+			FileName:   filename,
+		}, peer)
+
+		// If the uploader is offline or their channel is full, fail immediately.
+		if !ok {
+			log.Printf("Local Transfer %s FAILED: Uploader %s is not online.", transferID, peer)
+			c.send("transfer_error", TransferErrorPayload{
+				TransferID: transferID,
+				Message:    fmt.Sprintf("User '%s' is offline.", peer),
+			})
+			return
+		}
+
+		// ONLY if the uploader was contacted successfully, register the transfer and notify the downloader.
 		transfer := &TransferInfo{
 			ID:       transferID,
 			FileName: filename,
@@ -371,13 +389,14 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 		c.hub.transfers[transferID] = transfer
 		c.hub.mu.Unlock()
 
-		log.Printf("Local Transfer %s initiated: %s wants '%s' from %s", transferID, c.federatedName, filename, peer)
-
-		c.hub.unicast("upload_request", UploadRequestPayload{
+		c.send("transfer_start", TransferStartPayload{
 			TransferID: transferID,
 			FileName:   filename,
-		}, peer)
+			Size:       fileInfo.Size,
+			FromUser:   peer,
+		})
 	}
+	// --- END MODIFICATION ---
 }
 
 func generateTransferID() (string, error) {

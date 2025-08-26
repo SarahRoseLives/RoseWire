@@ -1,3 +1,4 @@
+// SERVER/s2s.go
 package main
 
 import (
@@ -227,12 +228,18 @@ func (h *S2SHandler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query().Get("query")
-	if query == "" {
-		http.Error(w, "Missing 'query' parameter", http.StatusBadRequest)
+	// --- START MODIFICATION: Get requester from query params and validate ---
+	requester := r.URL.Query().Get("requester")
+	if query == "" || requester == "" {
+		http.Error(w, "Missing 'query' or 'requester' parameter", http.StatusBadRequest)
 		return
 	}
-	results := h.Hub.fileRegistry.Search(query)
-	log.Printf("S2S Search: Found %d results for query '%s' for a peer.", len(results), query)
+	// --- END MODIFICATION ---
+
+	// --- START MODIFICATION: Pass requester to local search ---
+	results := h.Hub.fileRegistry.Search(query, requester)
+	// --- END MODIFICATION ---
+	log.Printf("S2S Search: Found %d results for query '%s' from '%s'.", len(results), query, requester)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(results); err != nil {
 		http.Error(w, "Failed to encode results", http.StatusInternalServerError)
