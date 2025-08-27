@@ -6,6 +6,10 @@ RoseWire is a federated communication platform built on the principle that your 
 
 ---
 
+![RoseWire Desktop](screenshots/search.png)
+
+---
+
 ## ✨ Features
 
 - **Federated Chat**  
