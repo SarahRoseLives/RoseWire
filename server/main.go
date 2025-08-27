@@ -34,7 +34,7 @@ const (
 	configFile            = "config.json"
 	defaultSshListenAddr  = "0.0.0.0:2222"
 	defaultHttpListenAddr = "0.0.0.0:8080"
-	serverVersion         = "1.0.0"
+	serverVersion         = "1.0.1"
 )
 
 type DataStreamManager struct {

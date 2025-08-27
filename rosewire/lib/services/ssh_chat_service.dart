@@ -9,7 +9,7 @@ import '../models/search_result.dart';
 
 class SshChatService {
   // Add the client's current version
-  static const String clientVersion = "1.0.0";
+  static const String clientVersion = "1.0.1";
 
   // Host is now nullable, it will be set before connect() is called.
   String? _host;
