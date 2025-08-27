@@ -46,7 +46,7 @@ func (c *S2SClient) getPeerPublicKey(peerAddress string) (ed25519.PublicKey, err
 	}
 
 	// Fetch from the peer's /actor endpoint
-	url := fmt.Sprintf("http://%s/actor", peerAddress)
+	url := fmt.Sprintf("https://%s/actor", peerAddress)
 	resp, err := c.client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch actor file from %s: %w", peerAddress, err)
@@ -109,7 +109,7 @@ func (c *S2SClient) signAndSend(method, url string, body []byte) (*http.Response
 
 // PushActivity sends an activity to a peer's inbox.
 func (c *S2SClient) PushActivity(peerAddress string, activity Activity) error {
-	url := fmt.Sprintf("http://%s/api/s2s/inbox", peerAddress)
+	url := fmt.Sprintf("https://%s/api/s2s/inbox", peerAddress)
 	body, err := json.Marshal(activity)
 	if err != nil {
 		return fmt.Errorf("failed to marshal activity: %w", err)
@@ -131,14 +131,10 @@ func (c *S2SClient) PushActivity(peerAddress string, activity Activity) error {
 }
 
 // SearchPeer searches a peer for files (no signing needed for GET).
-// --- START MODIFICATION: Add requester parameter ---
 func (c *S2SClient) SearchPeer(peerAddress string, query string, requester string) ([]SearchResult, error) {
-	// --- END MODIFICATION ---
 	encodedQuery := url.QueryEscape(query)
-	// --- START MODIFICATION: Add requester to URL ---
 	encodedRequester := url.QueryEscape(requester)
-	url := fmt.Sprintf("http://%s/api/s2s/search?query=%s&requester=%s", peerAddress, encodedQuery, encodedRequester)
-	// --- END MODIFICATION ---
+	url := fmt.Sprintf("https://%s/api/s2s/search?query=%s&requester=%s", peerAddress, encodedQuery, encodedRequester)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -168,7 +164,7 @@ func (c *S2SClient) SearchPeer(peerAddress string, query string, requester strin
 
 // RequestTransfer sends a request to a peer to initiate a file transfer.
 func (c *S2SClient) RequestTransfer(peerAddress string, transferReq S2STransferRequest) error {
-	url := fmt.Sprintf("http://%s/api/s2s/transfers", peerAddress)
+	url := fmt.Sprintf("https://%s/api/s2s/transfers", peerAddress)
 	body, err := json.Marshal(transferReq)
 	if err != nil {
 		return fmt.Errorf("failed to marshal transfer request: %w", err)
@@ -192,7 +188,7 @@ func (c *S2SClient) RequestTransfer(peerAddress string, transferReq S2STransferR
 func (c *S2SClient) RelayStream(targetPeerAddress, transferID, streamIndex string, data io.Reader) error {
 	// Note: Streaming bodies cannot be signed in one go. For now, we trust the initial transfer request.
 	// A more advanced implementation could use chunked signing (e.g., AWS Signature V4).
-	url := fmt.Sprintf("http://%s/api/s2s/data/%s/%s", targetPeerAddress, transferID, streamIndex)
+	url := fmt.Sprintf("https://%s/api/s2s/data/%s/%s", targetPeerAddress, transferID, streamIndex)
 	streamClient := &http.Client{}
 
 	req, err := http.NewRequest("POST", url, data)
@@ -219,7 +215,7 @@ func (c *S2SClient) RelayStream(targetPeerAddress, transferID, streamIndex strin
 
 // FetchPeers retrieves the list of known peers from another server.
 func (c *S2SClient) FetchPeers(peerAddress string) ([]string, error) {
-	url := fmt.Sprintf("http://%s/api/s2s/peers", peerAddress)
+	url := fmt.Sprintf("https://%s/api/s2s/peers", peerAddress)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -228,7 +224,7 @@ func (c *S2SClient) FetchPeers(peerAddress string) ([]string, error) {
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send peers request to %s: %w", peerAddress, err)
+		return nil, fmt.Errorf("failed to send peers request to %s: %w", err)
 	}
 	defer resp.Body.Close()
 

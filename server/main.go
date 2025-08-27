@@ -194,11 +194,8 @@ func ensureInstanceKey(path string) (crypto.Signer, error) {
 	return privKey, nil
 }
 
-// --- START ADDITION: Stale File Cleanup ---
-// startFileRegistryCleanup periodically removes stale user file entries.
 func startFileRegistryCleanup(registry *FileRegistry) {
 	log.Println("Starting stale file registry cleanup routine...")
-	// Run cleanup every 5 minutes for entries older than 15 minutes.
 	ticker := time.NewTicker(5 * time.Minute)
 	go func() {
 		for range ticker.C {
@@ -206,8 +203,6 @@ func startFileRegistryCleanup(registry *FileRegistry) {
 		}
 	}()
 }
-
-// --- END ADDITION ---
 
 func startGossipProtocol(hub *ChatHub) {
 	log.Println("Gossip protocol starting...")
@@ -257,7 +252,11 @@ func gossip(hub *ChatHub) {
 	hub.adminConfig.mu.RLock()
 	defer hub.adminConfig.mu.RUnlock()
 
-	listenPort := strings.Split(hub.config.HttpListenAddr, ":")[1]
+	listenAddrParts := strings.Split(hub.config.HttpListenAddr, ":")
+	listenPort := "8080"
+	if len(listenAddrParts) > 1 {
+		listenPort = listenAddrParts[len(listenAddrParts)-1]
+	}
 	selfAddress := fmt.Sprintf("%s:%s", hub.config.Domain, listenPort)
 
 	existingPeers := make(map[string]bool)
@@ -294,7 +293,7 @@ func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *Ch
 			Bytes: pubBytes,
 		}
 		actor := InstanceActor{
-			ID:        fmt.Sprintf("http://%s/actor", cfg.Domain),
+			ID:        fmt.Sprintf("https://%s/actor", cfg.Domain),
 			Type:      "Service",
 			PublicKey: string(pem.EncodeToMemory(pemBlock)),
 		}
@@ -327,9 +326,10 @@ func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *Ch
 	s2sRouter.HandleFunc("/data/{tid}/{idx}", s2sHandler.RelayData).Methods("POST")
 	s2sRouter.HandleFunc("/peers", s2sHandler.Peers).Methods("GET")
 
-	log.Printf("HTTP services (Status, WebFinger, S2S, Admin) listening at http://%s/", listenAddr)
-	if err := http.ListenAndServe(listenAddr, router); err != nil {
-		log.Fatalf("Failed to start HTTP server: %v", err)
+	// Start the server using the certificate files specified in the config
+	log.Printf("HTTPS services listening at https://%s%s/", cfg.Domain, listenAddr)
+	if err := http.ListenAndServeTLS(listenAddr, cfg.CertFile, cfg.KeyFile, router); err != nil {
+		log.Fatalf("Failed to start HTTPS server: %v", err)
 	}
 }
 
@@ -340,6 +340,13 @@ func main() {
 	cfg, err := LoadConfig(configFile)
 	if err != nil {
 		log.Fatalf("Failed to load %s: %v. Please create it.", configFile, err)
+	}
+	if cfg.Domain == "" {
+		log.Fatalf("The 'domain' field in %s cannot be empty.", configFile)
+	}
+	// Validate that certificate paths are provided
+	if cfg.CertFile == "" || cfg.KeyFile == "" {
+		log.Fatalf("The 'cert_file' and 'key_file' fields must be set in %s for manual TLS.", configFile)
 	}
 	log.Printf("Server domain configured as: %s", cfg.Domain)
 
@@ -374,9 +381,7 @@ func main() {
 	chatHub := NewChatHub(fileRegistry, cfg, s2sClient, adminCfg)
 	dataManager := NewDataStreamManager()
 
-	// --- START ADDITION: Start the cleanup goroutine ---
 	go startFileRegistryCleanup(fileRegistry)
-	// --- END ADDITION ---
 
 	sessionKey := make([]byte, 32)
 	_, err = rand.Read(sessionKey)

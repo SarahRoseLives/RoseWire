@@ -2,5 +2,7 @@
   "domain": "YOURDOMAINHERE",
   "ssh_listen_addr": "0.0.0.0:2222",
   "http_listen_addr": "0.0.0.0:8080",
+  "cert_file": "fullchain.pem",
+  "key_file": "privkey.pem",
   "peers": ["rosewire.rosevines.network:8080"]
 }

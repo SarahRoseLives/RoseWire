@@ -54,7 +54,7 @@ class SshChatService {
   
   Future<void> _checkServerVersion(String host) async {
     try {
-        final uri = Uri.parse('http://$host:8080/api/version');
+        final uri = Uri.parse('https://$host:8080/api/version');
         final response = await http.get(uri).timeout(const Duration(seconds: 5));
 
         if (response.statusCode == 200) {
