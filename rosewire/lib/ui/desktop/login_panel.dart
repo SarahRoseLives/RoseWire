@@ -7,6 +7,11 @@ import 'package:ssh_key/ssh_key.dart' as ssh_key;
 import 'package:pointycastle/export.dart' as pointy_castle;
 import 'package:dartssh2/dartssh2.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:window_size/window_size.dart';
+
+// Window size constants (match RoseWire main window, allow for login panel layout)
+const double kWindowWidth = 800;
+const double kWindowHeight = 550;
 
 class LoginPanel extends StatefulWidget {
   final void Function(String nickname, String keyPath) onLogin;
@@ -31,7 +36,18 @@ class _LoginPanelState extends State<LoginPanel> {
   @override
   void initState() {
     super.initState();
+    _resizeWindowEarly(); // Resize window before login UI
     _initialize();
+  }
+
+  void _resizeWindowEarly() {
+    // Set window size for desktop platforms before showing login panel
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      setWindowTitle('rosewire');
+      setWindowMinSize(const Size(kWindowWidth, kWindowHeight));
+      setWindowMaxSize(const Size(kWindowWidth, kWindowHeight));
+      setWindowFrame(const Rect.fromLTWH(100, 100, kWindowWidth, kWindowHeight));
+    }
   }
 
   Future<void> _initialize() async {
@@ -192,101 +208,104 @@ class _LoginPanelState extends State<LoginPanel> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Center(
-        child: Card(
-          color: Colors.grey[900],
-          elevation: 12,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          child: Container(
-            width: 400,
-            padding: const EdgeInsets.all(32),
-            child: _loading
-                ? Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const CircularProgressIndicator(),
-                      const SizedBox(height: 16),
-                      Text("Please wait...", style: TextStyle(color: Colors.white70))
-                    ],
-                  )
-                : Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                        "RoseWire Login",
-                        style: TextStyle(
-                            fontSize: 26,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.pinkAccent),
-                      ),
-                      const SizedBox(height: 24),
-                      TextField(
-                        controller: _serverController,
-                        decoration: const InputDecoration(
-                          labelText: "Instance Address",
-                          hintText: "e.g., rosewire.rosevines.network",
-                        ),
-                        onChanged: (value) => setState(() {}), // Rebuild to update user address display
-                      ),
-                      const SizedBox(height: 16),
-                      if (_keyNickPairs.isNotEmpty && !_creatingNew) ...[
-                        DropdownButtonFormField<String>(
-                          value: _selectedNick,
-                          items: _keyNickPairs
-                              .map((pair) => DropdownMenuItem(
-                                    value: pair['nickname'],
-                                    child: Text(pair['nickname']!),
-                                  ))
-                              .toList(),
-                          onChanged: _loading ? null : (val) {
-                            final selected = _keyNickPairs
-                                .firstWhere((pair) => pair['nickname'] == val);
-                            setState(() {
-                              _selectedNick = val;
-                              _selectedKeyPath = selected['keyPath'];
-                            });
-                          },
-                          decoration:
-                              const InputDecoration(labelText: "Select Profile"),
+        child: SizedBox(
+          width: kWindowWidth,
+          height: kWindowHeight,
+          child: Card(
+            color: Colors.grey[900],
+            elevation: 12,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            child: Container(
+              width: 400,
+              padding: const EdgeInsets.all(32),
+              child: _loading
+                  ? Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 16),
+                        Text("Please wait...", style: TextStyle(color: Colors.white70))
+                      ],
+                    )
+                  : Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          "RoseWire Login",
+                          style: TextStyle(
+                              fontSize: 26,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.pinkAccent),
                         ),
                         const SizedBox(height: 24),
-                        ElevatedButton.icon(
-                          icon: const Icon(Icons.login),
-                          label: Text("Login as $fullUserAddress"),
-                          onPressed: _loading ? null : _onLoginPressed,
-                        ),
-                        const SizedBox(height: 16),
-                        TextButton(
-                          child: const Text("Create new profile"),
-                          onPressed: _loading ? null : () => setState(() => _creatingNew = true),
-                        ),
-                      ],
-                      if (_creatingNew || _keyNickPairs.isEmpty) ...[
                         TextField(
+                          controller: _serverController,
                           decoration: const InputDecoration(
-                              labelText: "Enter new nickname"),
-                          onChanged: (val) => _newNick = val,
+                            labelText: "Instance Address",
+                            hintText: "e.g., rosewire.rosevines.network",
+                          ),
+                          onChanged: (value) => setState(() {}), // Rebuild to update user address display
                         ),
                         const SizedBox(height: 16),
-                        ElevatedButton.icon(
-                          icon: const Icon(Icons.vpn_key),
-                          label: const Text("Generate & Login"),
-                          onPressed: _loading ? null : _createNewKeyAndNick,
-                        ),
-                        if (_keyNickPairs.isNotEmpty)
+                        if (_keyNickPairs.isNotEmpty && !_creatingNew) ...[
+                          DropdownButtonFormField<String>(
+                            value: _selectedNick,
+                            items: _keyNickPairs
+                                .map((pair) => DropdownMenuItem(
+                                      value: pair['nickname'],
+                                      child: Text(pair['nickname']!),
+                                    ))
+                                .toList(),
+                            onChanged: _loading ? null : (val) {
+                              final selected = _keyNickPairs
+                                  .firstWhere((pair) => pair['nickname'] == val);
+                              setState(() {
+                                _selectedNick = val;
+                                _selectedKeyPath = selected['keyPath'];
+                              });
+                            },
+                            decoration:
+                                const InputDecoration(labelText: "Select Profile"),
+                          ),
+                          const SizedBox(height: 24),
+                          ElevatedButton.icon(
+                            icon: const Icon(Icons.login),
+                            label: Text("Login as $fullUserAddress"),
+                            onPressed: _loading ? null : _onLoginPressed,
+                          ),
+                          const SizedBox(height: 16),
                           TextButton(
-                            child: const Text("Back"),
-                            onPressed: _loading ? null : () => setState(() => _creatingNew = false),
+                            child: const Text("Create new profile"),
+                            onPressed: _loading ? null : () => setState(() => _creatingNew = true),
+                          ),
+                        ],
+                        if (_creatingNew || _keyNickPairs.isEmpty) ...[
+                          TextField(
+                            decoration: const InputDecoration(
+                                labelText: "Enter new nickname"),
+                            onChanged: (val) => _newNick = val,
+                          ),
+                          const SizedBox(height: 16),
+                          ElevatedButton.icon(
+                            icon: const Icon(Icons.vpn_key),
+                            label: const Text("Generate & Login"),
+                            onPressed: _loading ? null : _createNewKeyAndNick,
+                          ),
+                          if (_keyNickPairs.isNotEmpty)
+                            TextButton(
+                              child: const Text("Back"),
+                              onPressed: _loading ? null : () => setState(() => _creatingNew = false),
+                            ),
+                        ],
+                        if (_error != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 10),
+                            child:
+                                Text(_error!, style: const TextStyle(color: Colors.redAccent)),
                           ),
                       ],
-                      if (_error != null)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 10),
-                          child:
-                              Text(_error!, style: const TextStyle(color: Colors.redAccent)),
-                        ),
-                    ],
-                  ),
+                    ),
+            ),
           ),
         ),
       ),
