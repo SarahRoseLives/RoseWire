@@ -28,14 +28,13 @@ import (
 )
 
 const (
-	hostKeyFile         = "server_ed25519"
-	instanceKeyFile     = "instance_key.pem"
-	nickDBFile          = "nicks.db"
-	configFile          = "config.json"
+	hostKeyFile           = "server_ed25519"
+	instanceKeyFile       = "instance_key.pem"
+	nickDBFile            = "nicks.db"
+	configFile            = "config.json"
 	defaultSshListenAddr  = "0.0.0.0:2222"
 	defaultHttpListenAddr = "0.0.0.0:8080"
-	// --- MODIFICATION: Hardcode the server version ---
-	serverVersion = "1.0.0"
+	serverVersion         = "1.0.0"
 )
 
 type DataStreamManager struct {
@@ -195,6 +194,21 @@ func ensureInstanceKey(path string) (crypto.Signer, error) {
 	return privKey, nil
 }
 
+// --- START ADDITION: Stale File Cleanup ---
+// startFileRegistryCleanup periodically removes stale user file entries.
+func startFileRegistryCleanup(registry *FileRegistry) {
+	log.Println("Starting stale file registry cleanup routine...")
+	// Run cleanup every 5 minutes for entries older than 15 minutes.
+	ticker := time.NewTicker(5 * time.Minute)
+	go func() {
+		for range ticker.C {
+			registry.CleanupStaleEntries(15 * time.Minute)
+		}
+	}()
+}
+
+// --- END ADDITION ---
+
 func startGossipProtocol(hub *ChatHub) {
 	log.Println("Gossip protocol starting...")
 	ticker := time.NewTicker(5 * time.Minute)
@@ -209,7 +223,6 @@ func gossip(hub *ChatHub) {
 	hub.mu.Lock()
 	hub.adminConfig.mu.RLock()
 
-	// Filter out blocked peers before selecting one to gossip with
 	allowedPeers := []string{}
 	blockedMap := make(map[string]bool)
 	for _, p := range hub.adminConfig.BlockedPeers {
@@ -289,28 +302,23 @@ func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *Ch
 		json.NewEncoder(w).Encode(actor)
 	}).Methods("GET")
 
-	// Public routes
 	router.Handle("/", statusSvc)
 	router.Handle("/api/status", statusSvc)
 	router.Handle("/.well-known/webfinger", webfingerHandler)
-	// --- MODIFICATION: Add version endpoint ---
 	router.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"version": serverVersion})
 	}).Methods("GET")
 
-	// Admin routes
 	router.HandleFunc("/admin", adminHandler.ServeAdminPanel).Methods("GET")
 	router.HandleFunc("/admin/login", adminHandler.HandleLogin).Methods("POST")
 	router.HandleFunc("/admin/logout", adminHandler.HandleLogout).Methods("POST")
 
-	// Admin API routes (require session auth)
 	adminAPIRouter := router.PathPrefix("/api/admin").Subrouter()
 	adminAPIRouter.Use(adminHandler.AuthMiddleware)
 	adminAPIRouter.HandleFunc("/config", adminHandler.HandleGetConfig).Methods("GET")
 	adminAPIRouter.HandleFunc("/update", adminHandler.HandleUpdateConfig).Methods("POST")
 
-	// S2S routes
 	s2sRouter := router.PathPrefix("/api/s2s").Subrouter()
 	s2sRouter.Use(s2sHandler.authMiddleware)
 	s2sRouter.HandleFunc("/inbox", s2sHandler.Inbox).Methods("POST")
@@ -365,6 +373,10 @@ func main() {
 	s2sClient := NewS2SClient(instanceSigner, cfg.Domain)
 	chatHub := NewChatHub(fileRegistry, cfg, s2sClient, adminCfg)
 	dataManager := NewDataStreamManager()
+
+	// --- START ADDITION: Start the cleanup goroutine ---
+	go startFileRegistryCleanup(fileRegistry)
+	// --- END ADDITION ---
 
 	sessionKey := make([]byte, 32)
 	_, err = rand.Read(sessionKey)

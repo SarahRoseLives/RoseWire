@@ -49,11 +49,11 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
     _sshChatService = SshChatService();
 
     _sshChatService.versionStatus.listen((status) {
-        if (status.startsWith("Warning:") && mounted) {
-            setState(() {
-                _versionWarning = status;
-            });
-        }
+      if (status.startsWith("Warning:") && mounted) {
+        setState(() {
+          _versionWarning = status;
+        });
+      }
     });
 
     _buildPanels();
@@ -224,7 +224,10 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
               ),
               child: Center(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 900, maxHeight: 700),
+                  // --- MODIFICATION START ---
+                  // Adjusted the constraints to make the window more compact.
+                  constraints: const BoxConstraints(maxWidth: 850, maxHeight: 600),
+                  // --- MODIFICATION END ---
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(32),
                     child: BackdropFilter(

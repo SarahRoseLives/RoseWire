@@ -216,9 +216,8 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
           BottomNavigationBarItem(icon: Icon(Icons.swap_vertical_circle), label: 'Transfers'),
           BottomNavigationBarItem(icon: Icon(Icons.library_music), label: 'Library'),
           BottomNavigationBarItem(icon: Icon(Icons.chat), label: 'Chat'),
-          BottomNavigationBarItem(icon: Icon(Icons.cloud), label: 'Network'),
+          //BottomNavigationBarItem(icon: Icon(Icons.cloud), label: 'Network'),
           BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Settings'),
-          BottomNavigationBarItem(icon: Icon(Icons.info_outline), label: 'About'),
         ],
       ),
     );

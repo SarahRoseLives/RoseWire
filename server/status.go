@@ -53,15 +53,16 @@ func (s *StatusService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for nick := range s.Hub.clients {
 		users = append(users, nick)
 	}
-	for _, files := range s.Hub.fileRegistry.files {
-		filesShared += len(files)
+	// --- START FIX: Correctly count files from UserFileEntry ---
+	s.Hub.fileRegistry.mu.Lock()
+	for _, entry := range s.Hub.fileRegistry.files {
+		filesShared += len(entry.Files)
 	}
+	s.Hub.fileRegistry.mu.Unlock()
+	// --- END FIX ---
 	transfers := len(s.Hub.transfers)
 	totalTransfers := s.Hub.totalTransfers
-	// --- START FIX ---
-	// Calculate total servers: 1 (this server) + the number of known peers.
 	relayServers := 1 + len(s.Hub.config.Peers)
-	// --- END FIX ---
 	s.Hub.mu.Unlock()
 
 	status := ServerStatus{
@@ -74,7 +75,7 @@ func (s *StatusService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		FilesShared:       filesShared,
 		TransfersInFlight: transfers,
 		TotalTransfers:    totalTransfers,
-		RelayServers:      relayServers, // Use the dynamic count here
+		RelayServers:      relayServers,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -90,15 +91,16 @@ func (s *StatusService) apiStatus(w http.ResponseWriter, r *http.Request) {
 	for nick := range s.Hub.clients {
 		users = append(users, nick)
 	}
-	for _, files := range s.Hub.fileRegistry.files {
-		filesShared += len(files)
+	// --- START FIX: Correctly count files from UserFileEntry for API ---
+	s.Hub.fileRegistry.mu.Lock()
+	for _, entry := range s.Hub.fileRegistry.files {
+		filesShared += len(entry.Files)
 	}
+	s.Hub.fileRegistry.mu.Unlock()
+	// --- END FIX ---
 	transfers := len(s.Hub.transfers)
 	totalTransfers := s.Hub.totalTransfers
-	// --- START FIX ---
-	// Also calculate for the API endpoint.
 	relayServers := 1 + len(s.Hub.config.Peers)
-	// --- END FIX ---
 	s.Hub.mu.Unlock()
 
 	status := ServerStatus{
@@ -111,7 +113,7 @@ func (s *StatusService) apiStatus(w http.ResponseWriter, r *http.Request) {
 		FilesShared:       filesShared,
 		TransfersInFlight: transfers,
 		TotalTransfers:    totalTransfers,
-		RelayServers:      relayServers, // Use the dynamic count here
+		RelayServers:      relayServers,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

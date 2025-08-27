@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // SharedFile represents a file a user is sharing.
@@ -23,33 +24,44 @@ type SearchResult struct {
 	Peer     string `json:"peer"`
 }
 
+// UserFileEntry holds a user's file list and the last time it was updated.
+type UserFileEntry struct {
+	Files       []SharedFile
+	LastUpdated time.Time
+}
+
 // FileRegistry tracks all files shared by all connected users.
 type FileRegistry struct {
 	mu    sync.Mutex
-	files map[string][]SharedFile // nickname -> list of files
+	files map[string]*UserFileEntry // nickname -> entry with files and timestamp
 }
 
 // NewFileRegistry creates a new, empty file registry.
 func NewFileRegistry() *FileRegistry {
 	return &FileRegistry{
-		files: make(map[string][]SharedFile),
+		files: make(map[string]*UserFileEntry),
 	}
 }
 
-// UpdateUserFiles replaces the list of shared files for a given user.
+// UpdateUserFiles replaces the list of shared files for a given user
+// and updates their activity timestamp.
 func (r *FileRegistry) UpdateUserFiles(nickname string, fileList []SharedFile) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(fileList) > 0 {
-		r.files[nickname] = fileList
+
+	// An empty file list from a federated peer is a signal they have no files to share,
+	// but it still counts as an activity ping. A local user disconnecting will call
+	// RemoveUser directly.
+	if _, ok := r.files[nickname]; ok || len(fileList) > 0 {
+		r.files[nickname] = &UserFileEntry{
+			Files:       fileList,
+			LastUpdated: time.Now(),
+		}
 		log.Printf("Updated file list for %s with %d items.", nickname, len(fileList))
-	} else {
-		delete(r.files, nickname)
-		log.Printf("Cleared file list for %s.", nickname)
 	}
 }
 
-// RemoveUser clears all file information for a user (e.g., on disconnect).
+// RemoveUser clears all file information for a user (e.g., on local disconnect).
 func (r *FileRegistry) RemoveUser(nickname string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -57,17 +69,37 @@ func (r *FileRegistry) RemoveUser(nickname string) {
 	log.Printf("Removed user %s from file registry.", nickname)
 }
 
+// CleanupStaleEntries removes file listings for users who haven't been active
+// within the timeout period. This is crucial for federated users.
+func (r *FileRegistry) CleanupStaleEntries(timeout time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	cleanedCount := 0
+	for nickname, entry := range r.files {
+		if now.Sub(entry.LastUpdated) > timeout {
+			delete(r.files, nickname)
+			cleanedCount++
+		}
+	}
+
+	if cleanedCount > 0 {
+		log.Printf("Cleaned up %d stale user entries from file registry.", cleanedCount)
+	}
+}
+
 // VerifyFileOwner checks if a specific user is sharing a file with a specific name.
 func (r *FileRegistry) VerifyFileOwner(filename, owner string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	userFiles, ok := r.files[owner]
+	entry, ok := r.files[owner]
 	if !ok {
 		return false
 	}
 
-	for _, file := range userFiles {
+	for _, file := range entry.Files {
 		if file.Name == filename {
 			return true
 		}
@@ -86,16 +118,15 @@ func (r *FileRegistry) Search(query string, requester string) []SearchResult {
 	var results []SearchResult
 	trimmedQuery := strings.TrimSpace(query)
 
-	// --- START MODIFICATION: Handle federated username search ---
 	if strings.HasPrefix(trimmedQuery, "@") && strings.Count(trimmedQuery, "@") == 2 {
 		targetUser := trimmedQuery
 		if targetUser == requester {
 			return results // Don't return results if a user searches for themselves.
 		}
 
-		userFiles, ok := r.files[targetUser]
+		entry, ok := r.files[targetUser]
 		if ok {
-			for _, file := range userFiles {
+			for _, file := range entry.Files {
 				if !file.IsDir {
 					results = append(results, SearchResult{
 						FileName: file.Name,
@@ -108,21 +139,18 @@ func (r *FileRegistry) Search(query string, requester string) []SearchResult {
 		log.Printf("Direct user search for '%s' returned %d local results.", query, len(results))
 		return results
 	}
-	// --- END MODIFICATION ---
 
 	lowerQuery := strings.ToLower(trimmedQuery)
 	if lowerQuery == "" {
 		return results
 	}
 
-	for nickname, files := range r.files {
-		// --- START MODIFICATION: Don't show users their own files in search results ---
+	for nickname, entry := range r.files {
 		if nickname == requester {
 			continue
 		}
-		// --- END MODIFICATION ---
 
-		for _, file := range files {
+		for _, file := range entry.Files {
 			if !file.IsDir && strings.Contains(strings.ToLower(file.Name), lowerQuery) {
 				results = append(results, SearchResult{
 					FileName: file.Name,
@@ -142,8 +170,8 @@ func (r *FileRegistry) TopFiles(limit int) []SearchResult {
 	defer r.mu.Unlock()
 
 	var allFiles []SearchResult
-	for nickname, files := range r.files {
-		for _, file := range files {
+	for nickname, entry := range r.files {
+		for _, file := range entry.Files {
 			if !file.IsDir {
 				allFiles = append(allFiles, SearchResult{
 					FileName: file.Name,
@@ -210,12 +238,12 @@ func (r *FileRegistry) FindFile(filename, owner string) (SharedFile, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	userFiles, ok := r.files[owner]
+	entry, ok := r.files[owner]
 	if !ok {
 		return SharedFile{}, false
 	}
 
-	for _, file := range userFiles {
+	for _, file := range entry.Files {
 		if file.Name == filename {
 			return file, true
 		}

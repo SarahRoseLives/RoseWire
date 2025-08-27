@@ -314,7 +314,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 		return
 	}
 
-	// --- START MODIFICATION: Logic for remote and local transfers is now different ---
 	if isRemote {
 		peerDomain, ok := domainFromFederatedName(peer)
 		if !ok {
@@ -322,7 +321,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 			return
 		}
 
-		// First, tell the downloader that a transfer is starting.
 		c.send("transfer_start", TransferStartPayload{
 			TransferID: transferID,
 			FileName:   filename,
@@ -359,7 +357,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 		}()
 
 	} else {
-		// For local transfers, first try to contact the uploader.
 		log.Printf("Local Transfer %s initiated: %s wants '%s' from %s", transferID, c.federatedName, filename, peer)
 
 		ok := c.hub.unicast("upload_request", UploadRequestPayload{
@@ -367,7 +364,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 			FileName:   filename,
 		}, peer)
 
-		// If the uploader is offline or their channel is full, fail immediately.
 		if !ok {
 			log.Printf("Local Transfer %s FAILED: Uploader %s is not online.", transferID, peer)
 			c.send("transfer_error", TransferErrorPayload{
@@ -377,7 +373,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 			return
 		}
 
-		// ONLY if the uploader was contacted successfully, register the transfer and notify the downloader.
 		transfer := &TransferInfo{
 			ID:       transferID,
 			FileName: filename,
@@ -396,7 +391,6 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 			FromUser:   peer,
 		})
 	}
-	// --- END MODIFICATION ---
 }
 
 func generateTransferID() (string, error) {
@@ -514,6 +508,19 @@ func (c *ChatClient) readLoop() {
 func (c *ChatClient) Close() {
 	c.once.Do(func() {
 		c.fileRegistry.RemoveUser(c.federatedName)
+
+		// --- START FIX ---
+		// Federate an empty share list to notify peers that this user's files are gone.
+		log.Printf("Federating unshare for %s", c.federatedName)
+		shareObject, _ := json.Marshal(ShareActivityObject{Files: []SharedFile{}}) // Empty file list
+		activity := Activity{
+			Type:   "Share",
+			Actor:  c.federatedName,
+			Object: shareObject,
+		}
+		go c.hub.federateActivity(activity)
+		// --- END FIX ---
+
 		c.hub.part(c.federatedName)
 		close(c.done)
 		c.channel.Close()
