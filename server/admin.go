@@ -1,15 +1,16 @@
+// SERVER/admin.go
 package main
 
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"syscall"
-	"io/ioutil"
 
 	"github.com/gorilla/sessions"
 	"golang.org/x/crypto/bcrypt"
@@ -17,19 +18,20 @@ import (
 )
 
 const (
-	adminConfigFile     = "admin.json"
-	sessionName         = "rosewire-admin-session"
-	adminLoginHTMLFile  = "admin_login.html"
-	adminDashHTMLFile   = "admin_dashboard.html"
+	adminConfigFile    = "admin.json"
+	sessionName        = "rosewire-admin-session"
+	adminLoginHTMLFile = "admin_login.html"
+	adminDashHTMLFile  = "admin_dashboard.html"
 )
 
 // AdminConfig holds all administrative settings.
 type AdminConfig struct {
-	mu               sync.RWMutex
-	PasswordHash     string   `json:"password_hash"`
-	BlockedPeers     []string `json:"blocked_peers"`
-	BannedUsers      []string `json:"banned_users"`
-	BlockedFileTypes []string `json:"blocked_file_types"`
+	mu                    sync.RWMutex
+	PasswordHash          string   `json:"password_hash"`
+	BlockedPeers          []string `json:"blocked_peers"`
+	BannedUsers           []string `json:"banned_users"`           // Local users who cannot log in
+	BlockedFederatedUsers []string `json:"blocked_federated_users"` // Federated users who are muted
+	BlockedFileTypes      []string `json:"blocked_file_types"`
 }
 
 // AdminHandler manages all HTTP requests for the admin panel.
@@ -44,7 +46,7 @@ type AdminHandler struct {
 // NewAdminHandler creates a new handler for the admin interface.
 func NewAdminHandler(store *sessions.CookieStore, cfg *AdminConfig, hub *ChatHub) *AdminHandler {
 	loginHTML := mustLoadHTML(adminLoginHTMLFile)
-	dashHTML  := mustLoadHTML(adminDashHTMLFile)
+	dashHTML := mustLoadHTML(adminDashHTMLFile)
 	return &AdminHandler{
 		Store:       store,
 		AdminConfig: cfg,
@@ -193,7 +195,7 @@ func (h *AdminHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	session, _ := h.Store.Get(r, sessionName)
 	session.Values = make(map[interface{}]interface{}) // Clear all session data
-	session.Options.MaxAge = -1                        // Expire the cookie
+	session.Options.MaxAge = -1                      // Expire the cookie
 	session.Save(r, w)
 	http.Redirect(w, r, "/admin", http.StatusFound)
 }
@@ -246,12 +248,18 @@ func (h *AdminHandler) HandleUpdateConfig(w http.ResponseWriter, r *http.Request
 	case "peer":
 		list = &h.AdminConfig.BlockedPeers
 	case "user":
-		// The SYSTEM user cannot be banned.
-		if req.Value == "system" {
-			http.Error(w, "Cannot ban the SYSTEM user", http.StatusBadRequest)
-			return
+		if strings.Contains(req.Value, "@") {
+			// This is a federated user, add to the block list.
+			list = &h.AdminConfig.BlockedFederatedUsers
+		} else {
+			// This is a local user, add to the ban list.
+			// The SYSTEM user cannot be banned.
+			if req.Value == "system" {
+				http.Error(w, "Cannot ban the SYSTEM user", http.StatusBadRequest)
+				return
+			}
+			list = &h.AdminConfig.BannedUsers
 		}
-		list = &h.AdminConfig.BannedUsers
 	case "filetype":
 		// Ensure filetypes start with a dot
 		if !strings.HasPrefix(req.Value, ".") {
@@ -286,15 +294,22 @@ func (h *AdminHandler) HandleUpdateConfig(w http.ResponseWriter, r *http.Request
 		*list = newList
 	}
 
-	// For user bans, disconnect them if they are currently online.
+	// For user actions, disconnect local users or purge remote user files.
 	if req.Type == "user" && req.Action == "add" {
-		federatedName := fmt.Sprintf("@%s@%s", req.Value, h.ChatHub.config.Domain)
-		h.ChatHub.mu.Lock()
-		if client, ok := h.ChatHub.clients[federatedName]; ok {
-			log.Printf("Admin: Disconnecting banned user %s", federatedName)
-			go client.Close()
+		if strings.Contains(req.Value, "@") {
+			// This is a federated user; remove their files from the local registry.
+			log.Printf("Admin: Blocking federated user %s and removing their files.", req.Value)
+			h.ChatHub.fileRegistry.RemoveUser(req.Value)
+		} else {
+			// This is a local user; disconnect them if they are online.
+			federatedName := fmt.Sprintf("@%s@%s", req.Value, h.ChatHub.config.Domain)
+			h.ChatHub.mu.Lock()
+			if client, ok := h.ChatHub.clients[federatedName]; ok {
+				log.Printf("Admin: Disconnecting banned user %s", federatedName)
+				go client.Close()
+			}
+			h.ChatHub.mu.Unlock()
 		}
-		h.ChatHub.mu.Unlock()
 	}
 
 	if err := h.AdminConfig.Save(adminConfigFile); err != nil {

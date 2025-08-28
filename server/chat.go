@@ -106,13 +106,12 @@ func (c *ChatClient) sendSystemMessage(text string) {
 func (c *ChatClient) handleSystemCommand(text string) {
 	parts := strings.Fields(text)
 	if len(parts) < 2 {
-		c.sendSystemMessage("Invalid command format. Use !kick <user|@user@domain>.")
+		c.sendSystemMessage("Invalid command format. Use !kick <user> or !ban <user|@user@domain>.")
 		return
 	}
 	command := parts[0]
 	targetUser := parts[1]
 
-	// The SYSTEM user cannot be targeted.
 	systemFederatedName := fmt.Sprintf("@system@%s", c.hub.config.Domain)
 	if strings.EqualFold(targetUser, "SYSTEM") || strings.EqualFold(targetUser, systemFederatedName) {
 		c.sendSystemMessage("The SYSTEM user cannot be targeted.")
@@ -123,13 +122,11 @@ func (c *ChatClient) handleSystemCommand(text string) {
 	var targetDomain string
 	var isRemote bool
 
-	// Check if the user provided a full federated name
 	if strings.HasPrefix(targetUser, "@") && strings.Count(targetUser, "@") == 2 {
 		federatedName = strings.ToLower(targetUser)
 		domainParts := strings.Split(federatedName, "@")
 		targetDomain = domainParts[2]
 	} else {
-		// Assume it's a local user if no domain is provided
 		federatedName = fmt.Sprintf("@%s@%s", strings.ToLower(targetUser), c.hub.config.Domain)
 		targetDomain = c.hub.config.Domain
 	}
@@ -165,43 +162,60 @@ func (c *ChatClient) handleSystemCommand(text string) {
 		}, "")
 
 	case "!ban":
+		c.hub.adminConfig.mu.Lock()
+		var list *[]string
+		var userIdentifier string
+
 		if isRemote {
-			c.sendSystemMessage(fmt.Sprintf("Cannot ban a remote user. The ban list is local to this server. Please contact an admin on %s.", targetDomain))
-			return
+			list = &c.hub.adminConfig.BlockedFederatedUsers
+			userIdentifier = federatedName
+		} else {
+			list = &c.hub.adminConfig.BannedUsers
+			userIdentifier = usernameToBan
 		}
 
-		c.hub.adminConfig.mu.Lock()
 		found := false
-		for _, bannedUser := range c.hub.adminConfig.BannedUsers {
-			if bannedUser == usernameToBan {
+		for _, bannedUser := range *list {
+			if bannedUser == userIdentifier {
 				found = true
 				break
 			}
 		}
+
 		if !found {
-			c.hub.adminConfig.BannedUsers = append(c.hub.adminConfig.BannedUsers, usernameToBan)
+			*list = append(*list, userIdentifier)
 			if err := c.hub.adminConfig.Save(adminConfigFile); err != nil {
 				log.Printf("ERROR: Failed to save admin config after ban: %v", err)
-				c.sendSystemMessage("Error: Failed to save ban list.")
+				c.sendSystemMessage("Error: Failed to save configuration.")
 				c.hub.adminConfig.mu.Unlock()
 				return
 			}
-			c.sendSystemMessage(fmt.Sprintf("User '%s' has been added to the local ban list.", usernameToBan))
+			if isRemote {
+				c.hub.fileRegistry.RemoveUser(federatedName)
+				c.sendSystemMessage(fmt.Sprintf("Federated user %s has been blocked. Their messages and files will be hidden on this server.", federatedName))
+			} else {
+				c.sendSystemMessage(fmt.Sprintf("Local user '%s' has been added to the ban list.", userIdentifier))
+			}
 		} else {
-			c.sendSystemMessage(fmt.Sprintf("User '%s' is already banned.", usernameToBan))
+			if isRemote {
+				c.sendSystemMessage(fmt.Sprintf("Federated user %s is already blocked.", federatedName))
+			} else {
+				c.sendSystemMessage(fmt.Sprintf("Local user '%s' is already banned.", userIdentifier))
+			}
 		}
 		c.hub.adminConfig.mu.Unlock()
 
-		c.hub.mu.Lock()
-		targetClient, ok := c.hub.clients[federatedName]
-		c.hub.mu.Unlock()
-
-		if ok {
-			log.Printf("SYSTEM command: Banning and kicking user %s", federatedName)
-			go targetClient.Close()
+		if !isRemote {
+			c.hub.mu.Lock()
+			targetClient, ok := c.hub.clients[federatedName]
+			c.hub.mu.Unlock()
+			if ok {
+				log.Printf("SYSTEM command: Banning and kicking local user %s", federatedName)
+				go targetClient.Close()
+			}
 		}
 
-		banMsg := fmt.Sprintf("User %s has been banned by an administrator.", federatedName)
+		banMsg := fmt.Sprintf("User %s has been banned by a local administrator.", federatedName)
 		c.hub.broadcast("system_broadcast", ChatBroadcastPayload{
 			Timestamp: time.Now().Format("15:04"),
 			Text:      banMsg,
@@ -417,11 +431,24 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 			break
 		}
 	}
+	isFederatedUserBlocked := false
+	for _, blockedUser := range c.hub.adminConfig.BlockedFederatedUsers {
+		if peer == blockedUser {
+			isFederatedUserBlocked = true
+			break
+		}
+	}
 	c.hub.adminConfig.mu.RUnlock()
 
 	if isBlocked {
 		log.Printf("DOWNLOAD BLOCKED: User '%s' tried to download blocked filetype: %s", c.federatedName, filename)
 		c.send("transfer_error", TransferErrorPayload{Message: "This file type is blocked by the server administrator."})
+		return
+	}
+
+	if isFederatedUserBlocked {
+		log.Printf("DOWNLOAD BLOCKED: User '%s' tried to download file from a blocked user: %s", c.federatedName, peer)
+		c.send("transfer_error", TransferErrorPayload{Message: "Cannot download files from a user who has been blocked on this server."})
 		return
 	}
 
@@ -643,8 +670,6 @@ func (c *ChatClient) Close() {
 	c.once.Do(func() {
 		c.fileRegistry.RemoveUser(c.federatedName)
 
-		// --- START FIX ---
-		// Federate an empty share list to notify peers that this user's files are gone.
 		log.Printf("Federating unshare for %s", c.federatedName)
 		shareObject, _ := json.Marshal(ShareActivityObject{Files: []SharedFile{}}) // Empty file list
 		activity := Activity{
@@ -653,7 +678,6 @@ func (c *ChatClient) Close() {
 			Object: shareObject,
 		}
 		go c.hub.federateActivity(activity)
-		// --- END FIX ---
 
 		c.hub.part(c.federatedName)
 		close(c.done)

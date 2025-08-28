@@ -45,7 +45,6 @@ func (h *S2SHandler) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		identity := r.Header.Get("X-RoseWire-Identity")
-		// --- START FIX: Check for blocked peers ---
 		h.AdminConfig.mu.RLock()
 		isBlocked := false
 		for _, blockedPeer := range h.AdminConfig.BlockedPeers {
@@ -61,7 +60,6 @@ func (h *S2SHandler) authMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "Forbidden: This peer is blocked by the instance administrator.", http.StatusForbidden)
 			return
 		}
-		// --- END FIX ---
 
 		// For streaming data, we only check the identity header for now.
 		if strings.HasPrefix(r.URL.Path, "/api/s2s/data/") {
@@ -228,17 +226,13 @@ func (h *S2SHandler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query().Get("query")
-	// --- START MODIFICATION: Get requester from query params and validate ---
 	requester := r.URL.Query().Get("requester")
 	if query == "" || requester == "" {
 		http.Error(w, "Missing 'query' or 'requester' parameter", http.StatusBadRequest)
 		return
 	}
-	// --- END MODIFICATION ---
 
-	// --- START MODIFICATION: Pass requester to local search ---
 	results := h.Hub.fileRegistry.Search(query, requester)
-	// --- END MODIFICATION ---
 	log.Printf("S2S Search: Found %d results for query '%s' from '%s'.", len(results), query, requester)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(results); err != nil {
@@ -247,6 +241,21 @@ func (h *S2SHandler) Search(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *S2SHandler) handleCreateActivity(activity Activity) {
+	h.AdminConfig.mu.RLock()
+	isBlocked := false
+	for _, blockedUser := range h.AdminConfig.BlockedFederatedUsers {
+		if activity.Actor == blockedUser {
+			isBlocked = true
+			break
+		}
+	}
+	h.AdminConfig.mu.RUnlock()
+
+	if isBlocked {
+		log.Printf("S2S: Dropped incoming chat message from locally blocked user %s.", activity.Actor)
+		return // Silently drop the message and do not broadcast it.
+	}
+
 	var chatObj ChatActivityObject
 	if err := json.Unmarshal(activity.Object, &chatObj); err != nil {
 		log.Printf("S2S Error: could not decode Create activity object: %v", err)
@@ -263,6 +272,23 @@ func (h *S2SHandler) handleCreateActivity(activity Activity) {
 }
 
 func (h *S2SHandler) handleShareActivity(activity Activity) {
+	h.AdminConfig.mu.RLock()
+	isBlocked := false
+	for _, blockedUser := range h.AdminConfig.BlockedFederatedUsers {
+		if activity.Actor == blockedUser {
+			isBlocked = true
+			break
+		}
+	}
+	h.AdminConfig.mu.RUnlock()
+
+	if isBlocked {
+		log.Printf("S2S: Dropped incoming Share activity from locally blocked user %s.", activity.Actor)
+		// Ensure their files are removed if they were added before the block.
+		h.Hub.fileRegistry.RemoveUser(activity.Actor)
+		return // Silently drop the share activity.
+	}
+
 	var shareObj ShareActivityObject
 	if err := json.Unmarshal(activity.Object, &shareObj); err != nil {
 		log.Printf("S2S Error: could not decode Share activity object: %v", err)
