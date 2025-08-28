@@ -8,7 +8,7 @@ You can find the 1st ever instance running at https://rosevines.network/
 
 ---
 
-![RoseWire Desktop](screenshots/search.png)
+![RoseWire Desktop Screen](screenshots/search.png)
 
 ---
 
