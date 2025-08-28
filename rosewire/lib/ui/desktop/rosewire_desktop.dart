@@ -1,5 +1,5 @@
 // CLIENT/ui/desktop/rosewire_desktop.dart
-import 'dart:async'; // --- MODIFICATION: Add async import
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:ui';
@@ -22,6 +22,9 @@ const rosePurple = Color(0xFF6C3483);
 const roseWhite = Colors.white;
 const roseGray = Color(0xFF22232A);
 const roseGreen = Color(0xFF26C281);
+const roseOrange = Colors.orange;
+const roseRed = Colors.redAccent;
+
 
 class RoseWireDesktop extends StatefulWidget {
   final String nickname;
@@ -34,23 +37,36 @@ class RoseWireDesktop extends StatefulWidget {
 }
 
 class _RoseWireDesktopState extends State<RoseWireDesktop> {
-  int _selectedPanelIndex = 3; // Default to chat panel
+  int _selectedPanelIndex = 3;
 
   late final SshChatService _sshChatService;
   String? _libraryFolder;
   List<File> _libraryFiles = [];
-  String _serverHost = 'rosewire.rosevines.network'; // Store the current host
+  String _serverHost = 'rosewire.rosevines.network';
   String? _versionWarning;
-  // --- MODIFICATION START ---
   Timer? _shareRefreshTimer;
-  // --- MODIFICATION END ---
 
-  late List<Widget> _panels = []; // Initialize as empty
+  ConnectionStatus _connectionStatus = ConnectionStatus.connected;
+  StreamSubscription? _connectionStatusSubscription;
+
+
+  late List<Widget> _panels = [];
 
   @override
   void initState() {
     super.initState();
     _sshChatService = SshChatService();
+
+    _connectionStatusSubscription = _sshChatService.connectionStatus.listen((status) {
+      if (mounted) {
+        setState(() {
+          _connectionStatus = status;
+        });
+        if (status == ConnectionStatus.connected) {
+          _shareLibraryToServer();
+        }
+      }
+    });
 
     _sshChatService.versionStatus.listen((status) {
       if (status.startsWith("Warning:") && mounted) {
@@ -90,7 +106,6 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
     final prefs = await SharedPreferences.getInstance();
     _serverHost = prefs.getString('rosewire_server') ?? 'rosewire.rosevines.network';
 
-    // Rebuild panels now that we have the correct host
     _buildPanels();
 
     await _sshChatService.connect(
@@ -100,15 +115,13 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
     );
     await _restoreLibraryAndShare();
 
-    // --- MODIFICATION START: Schedule periodic reshares ---
-    _shareRefreshTimer?.cancel(); // Cancel any existing timer
+    _shareRefreshTimer?.cancel();
     _shareRefreshTimer = Timer.periodic(const Duration(minutes: 10), (_) {
-      if (mounted) {
+      if (mounted && _connectionStatus == ConnectionStatus.connected) {
         print("Refreshing file share to keep it alive...");
         _shareLibraryToServer();
       }
     });
-    // --- MODIFICATION END ---
   }
 
   Future<void> _restoreLibraryAndShare() async {
@@ -153,13 +166,13 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
       };
     }).toList();
     _sshChatService.shareFiles(filesPayload);
+    print("Shared ${filesPayload.length} files with the network.");
   }
 
   @override
   void dispose() {
-    // --- MODIFICATION START ---
     _shareRefreshTimer?.cancel();
-    // --- MODIFICATION END ---
+    _connectionStatusSubscription?.cancel();
     _sshChatService.dispose();
     super.dispose();
   }
@@ -241,10 +254,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
               ),
               child: Center(
                 child: ConstrainedBox(
-                  // --- MODIFICATION START ---
-                  // Adjusted the constraints to make the window more compact.
                   constraints: const BoxConstraints(maxWidth: 850, maxHeight: 600),
-                  // --- MODIFICATION END ---
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(32),
                     child: BackdropFilter(
@@ -284,7 +294,10 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
                                       children: _panels,
                                     ),
                             ),
-                            _RoseWireStatusBar(nickname: widget.nickname),
+                            _RoseWireStatusBar(
+                              nickname: widget.nickname,
+                              status: _connectionStatus,
+                            ),
                           ],
                         ),
                       ),
@@ -363,10 +376,34 @@ class _RoseWireHeader extends StatelessWidget {
 
 class _RoseWireStatusBar extends StatelessWidget {
   final String nickname;
-  const _RoseWireStatusBar({required this.nickname});
+  final ConnectionStatus status;
+
+  const _RoseWireStatusBar({required this.nickname, required this.status});
 
   @override
   Widget build(BuildContext context) {
+    IconData icon;
+    Color color;
+    String text;
+
+    switch (status) {
+      case ConnectionStatus.connected:
+        icon = Icons.lock;
+        color = roseGreen;
+        text = "Connected via SSH as $nickname";
+        break;
+      case ConnectionStatus.reconnecting:
+        icon = Icons.sync_problem;
+        color = roseOrange;
+        text = "Connection lost. Reconnecting...";
+        break;
+      case ConnectionStatus.disconnected:
+        icon = Icons.cloud_off;
+        color = roseRed;
+        text = "Offline. Could not connect to the server.";
+        break;
+    }
+
     return Container(
       height: 32,
       padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -381,12 +418,12 @@ class _RoseWireStatusBar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.lock, size: 16, color: roseGreen),
+          Icon(icon, size: 16, color: color),
           const SizedBox(width: 8),
           Text(
-            "Connected via SSH as $nickname",
-            style: const TextStyle(
-              color: roseGreen,
+            text,
+            style: TextStyle(
+              color: color,
               fontWeight: FontWeight.bold,
               fontSize: 14,
             ),

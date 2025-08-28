@@ -32,18 +32,18 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
 
   String? _versionWarning;
   StreamSubscription? _versionSubscription;
-  // --- MODIFICATION START ---
   Timer? _shareRefreshTimer;
-  // --- MODIFICATION END ---
+
+  ConnectionStatus _connectionStatus = ConnectionStatus.connected;
+  StreamSubscription? _connectionStatusSubscription;
 
   late final SshChatService _chatService = SshChatService();
 
   @override
   void dispose() {
     _versionSubscription?.cancel();
-    // --- MODIFICATION START ---
     _shareRefreshTimer?.cancel();
-    // --- MODIFICATION END ---
+    _connectionStatusSubscription?.cancel();
     _chatService.dispose();
     super.dispose();
   }
@@ -62,7 +62,6 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
     return File('${dir.path}/${nickname}_rosewire_library.json');
   }
 
-  // --- MODIFICATION START: Create a reusable reshare function ---
   Future<void> _reshareLibraryFiles() async {
     if (_libraryPath == null) return;
 
@@ -77,21 +76,27 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
         };
       }).toList();
       _chatService.shareFiles(filesPayload);
+      print("Shared ${filesPayload.length} files with the network.");
     }
   }
-  // --- MODIFICATION END ---
 
   Future<void> _initializeServicesAfterLogin(String nickname, String keyPath) async {
+    _connectionStatusSubscription = _chatService.connectionStatus.listen((status) {
+      if (mounted) {
+        setState(() {
+          _connectionStatus = status;
+        });
+        if (status == ConnectionStatus.connected) {
+          _reshareLibraryFiles();
+        }
+      }
+    });
+
     _versionSubscription = _chatService.versionStatus.listen((status) {
       if (status.startsWith("Warning:") && mounted) {
-        setState(() {
-          _versionWarning = status;
-        });
+        setState(() => _versionWarning = status);
       } else if (mounted) {
-        // Clear warning if server is okay
-        setState(() {
-          _versionWarning = null;
-        });
+        setState(() => _versionWarning = null);
       }
     });
 
@@ -130,18 +135,15 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
       host: _serverHost,
     );
 
-    // Initial share
     await _reshareLibraryFiles();
 
-    // --- MODIFICATION START: Schedule periodic reshares ---
-    _shareRefreshTimer?.cancel(); // Cancel any existing timer
+    _shareRefreshTimer?.cancel();
     _shareRefreshTimer = Timer.periodic(const Duration(minutes: 10), (_) {
-      if (_loggedIn) {
+      if (_loggedIn && _connectionStatus == ConnectionStatus.connected) {
         print("Refreshing file share to keep it alive...");
         _reshareLibraryFiles();
       }
     });
-    // --- MODIFICATION END ---
   }
 
   void _handleLibraryChanged(String folderPath, List<Map<String, dynamic>> files) {
@@ -153,9 +155,7 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
   }
 
   List<Widget> get _tabs {
-    // Construct the full user address to pass to the chat panel
     final currentUserAddress = '@${_nickname ?? ''}@$_serverHost';
-
     return [
       SearchPanelMobile(chatService: _chatService),
       TransfersPanelMobile(chatService: _chatService),
@@ -176,24 +176,68 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
     ];
   }
 
-  PreferredSizeWidget? _buildVersionWarningBanner() {
-    if (_versionWarning == null) {
-      return null;
+  PreferredSizeWidget? _buildStatusBanners() {
+    final banners = <Widget>[];
+
+    final connectionBanner = _buildConnectionStatusBanner();
+    if (connectionBanner != null) {
+      banners.add(connectionBanner);
+    } else {
+      final versionBanner = _buildVersionWarningBanner();
+      if (versionBanner != null) {
+        banners.add(versionBanner);
+      }
     }
+
+    if (banners.isEmpty) return null;
+
     return PreferredSize(
-      preferredSize: const Size.fromHeight(48.0),
-      child: Container(
-        color: Colors.orange[800],
-        padding: const EdgeInsets.all(8.0),
-        child: Center(
-          child: Text(
-            _versionWarning!,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
+      preferredSize: Size.fromHeight(banners.length * 48.0),
+      child: Column(children: banners),
+    );
+  }
+
+  Widget? _buildVersionWarningBanner() {
+    if (_versionWarning == null) return null;
+    return Container(
+      height: 48,
+      color: Colors.orange[800],
+      padding: const EdgeInsets.all(8.0),
+      child: Center(
+        child: Text(
+          _versionWarning!,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+      ),
+    );
+  }
+
+  Widget? _buildConnectionStatusBanner() {
+    String? text;
+    Color? color;
+    switch (_connectionStatus) {
+      case ConnectionStatus.connected:
+        return null;
+      case ConnectionStatus.reconnecting:
+        text = "Connection lost. Reconnecting...";
+        color = Colors.orange[800];
+        break;
+      case ConnectionStatus.disconnected:
+        text = "Offline. Could not connect to server.";
+        color = Colors.red[800];
+        break;
+    }
+
+    return Container(
+      height: 48,
+      color: color,
+      padding: const EdgeInsets.all(8.0),
+      child: Center(
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
       ),
     );
@@ -213,7 +257,7 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
           fontSize: 20,
           fontWeight: FontWeight.bold,
         ),
-        bottom: _buildVersionWarningBanner(),
+        bottom: _buildStatusBanners(),
       ),
       body: IndexedStack(
         index: _selectedTab,
