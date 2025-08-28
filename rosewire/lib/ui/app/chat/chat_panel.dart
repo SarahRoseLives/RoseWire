@@ -1,3 +1,4 @@
+// CLIENT/ui/app/chat/chat_panel.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
@@ -24,15 +25,10 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
   final ScrollController _scrollController = ScrollController();
   final List<_ChatMessage> _messages = [];
   StreamSubscription? _messageSubscription;
-  late final String _currentUserInstance;
 
   @override
   void initState() {
     super.initState();
-    // Safely extract the instance domain from the current user's address
-    final parts = widget.currentUserAddress.split('@');
-    _currentUserInstance = parts.length > 2 ? parts.last : '';
-
     _messageSubscription = widget.chatService.messages.listen(_onMessageReceived);
   }
 
@@ -144,7 +140,6 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // --- FIX: Display the full federated name directly ---
                         if (!isMe)
                           Padding(
                             padding: const EdgeInsets.only(bottom: 4.0),

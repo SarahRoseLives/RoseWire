@@ -90,6 +90,129 @@ func (hub *ChatHub) federateActivity(activity Activity) {
 	}
 }
 
+// Helper to send a system message back to the SYSTEM user only.
+func (c *ChatClient) sendSystemMessage(text string) {
+	if c.nickname != "SYSTEM" {
+		return
+	}
+	payload := ChatBroadcastPayload{
+		Timestamp: time.Now().Format("15:04"),
+		Text:      text,
+		IsSystem:  true,
+	}
+	c.send("system_broadcast", payload)
+}
+
+func (c *ChatClient) handleSystemCommand(text string) {
+	parts := strings.Fields(text)
+	if len(parts) < 2 {
+		c.sendSystemMessage("Invalid command format. Use !kick <user|@user@domain>.")
+		return
+	}
+	command := parts[0]
+	targetUser := parts[1]
+
+	// The SYSTEM user cannot be targeted.
+	systemFederatedName := fmt.Sprintf("@system@%s", c.hub.config.Domain)
+	if strings.EqualFold(targetUser, "SYSTEM") || strings.EqualFold(targetUser, systemFederatedName) {
+		c.sendSystemMessage("The SYSTEM user cannot be targeted.")
+		return
+	}
+
+	var federatedName string
+	var targetDomain string
+	var isRemote bool
+
+	// Check if the user provided a full federated name
+	if strings.HasPrefix(targetUser, "@") && strings.Count(targetUser, "@") == 2 {
+		federatedName = strings.ToLower(targetUser)
+		domainParts := strings.Split(federatedName, "@")
+		targetDomain = domainParts[2]
+	} else {
+		// Assume it's a local user if no domain is provided
+		federatedName = fmt.Sprintf("@%s@%s", strings.ToLower(targetUser), c.hub.config.Domain)
+		targetDomain = c.hub.config.Domain
+	}
+
+	isRemote = (targetDomain != c.hub.config.Domain)
+	usernameToBan := strings.Split(strings.TrimPrefix(federatedName, "@"), "@")[0]
+
+	switch command {
+	case "!kick":
+		if isRemote {
+			c.sendSystemMessage(fmt.Sprintf("Cannot moderate remote user %s. This action can only be performed by an administrator on %s.", federatedName, targetDomain))
+			return
+		}
+
+		c.hub.mu.Lock()
+		targetClient, ok := c.hub.clients[federatedName]
+		c.hub.mu.Unlock()
+
+		if !ok {
+			c.sendSystemMessage(fmt.Sprintf("Local user '%s' not found or is not online.", federatedName))
+			return
+		}
+
+		log.Printf("SYSTEM command: Kicking user %s", federatedName)
+		c.sendSystemMessage(fmt.Sprintf("Kicking user %s...", federatedName))
+		go targetClient.Close()
+
+		kickMsg := fmt.Sprintf("User %s has been kicked by an administrator.", federatedName)
+		c.hub.broadcast("system_broadcast", ChatBroadcastPayload{
+			Timestamp: time.Now().Format("15:04"),
+			Text:      kickMsg,
+			IsSystem:  true,
+		}, "")
+
+	case "!ban":
+		if isRemote {
+			c.sendSystemMessage(fmt.Sprintf("Cannot ban a remote user. The ban list is local to this server. Please contact an admin on %s.", targetDomain))
+			return
+		}
+
+		c.hub.adminConfig.mu.Lock()
+		found := false
+		for _, bannedUser := range c.hub.adminConfig.BannedUsers {
+			if bannedUser == usernameToBan {
+				found = true
+				break
+			}
+		}
+		if !found {
+			c.hub.adminConfig.BannedUsers = append(c.hub.adminConfig.BannedUsers, usernameToBan)
+			if err := c.hub.adminConfig.Save(adminConfigFile); err != nil {
+				log.Printf("ERROR: Failed to save admin config after ban: %v", err)
+				c.sendSystemMessage("Error: Failed to save ban list.")
+				c.hub.adminConfig.mu.Unlock()
+				return
+			}
+			c.sendSystemMessage(fmt.Sprintf("User '%s' has been added to the local ban list.", usernameToBan))
+		} else {
+			c.sendSystemMessage(fmt.Sprintf("User '%s' is already banned.", usernameToBan))
+		}
+		c.hub.adminConfig.mu.Unlock()
+
+		c.hub.mu.Lock()
+		targetClient, ok := c.hub.clients[federatedName]
+		c.hub.mu.Unlock()
+
+		if ok {
+			log.Printf("SYSTEM command: Banning and kicking user %s", federatedName)
+			go targetClient.Close()
+		}
+
+		banMsg := fmt.Sprintf("User %s has been banned by an administrator.", federatedName)
+		c.hub.broadcast("system_broadcast", ChatBroadcastPayload{
+			Timestamp: time.Now().Format("15:04"),
+			Text:      banMsg,
+			IsSystem:  true,
+		}, "")
+
+	default:
+		c.sendSystemMessage(fmt.Sprintf("Unknown command: %s", command))
+	}
+}
+
 func (c *ChatClient) handleMessage(msg InboundMessage) {
 	switch msg.Type {
 	case "share":
@@ -221,6 +344,13 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 	case "chat_message":
 		var p ChatMessagePayload
 		if err := json.Unmarshal(msg.Payload, &p); err == nil {
+			// Check if the message is from the SYSTEM user and is a command.
+			if c.nickname == "SYSTEM" && strings.HasPrefix(p.Text, "!") {
+				c.handleSystemCommand(p.Text)
+				return // Command is handled, don't broadcast it as a regular message.
+			}
+
+			// If not a command, proceed as a regular chat message.
 			broadcastPayload := ChatBroadcastPayload{
 				Timestamp: time.Now().Format("15:04"),
 				Nickname:  c.federatedName,
@@ -415,6 +545,10 @@ func (hub *ChatHub) Join(nickname string, channel ssh.Channel) *ChatClient {
 	hub.mu.Lock()
 	hub.clients[federatedName] = client
 	hub.mu.Unlock()
+
+	// Unicast a welcome message with the user's confirmed identity.
+	client.send("welcome", map[string]string{"identity": federatedName})
+
 	go client.readLoop()
 	go client.writeLoop()
 	joinMsg := ChatBroadcastPayload{

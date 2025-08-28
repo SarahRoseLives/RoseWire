@@ -5,14 +5,14 @@ import 'dart:io';
 import 'dart:math';
 import 'package:http/http.dart' as http;
 import 'package:dartssh2/dartssh2.dart';
-import 'package:connectivity_plus/connectivity_plus.dart'; // --- MODIFICATION: Import package
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'ssh_file_service.dart';
 import '../models/search_result.dart';
 
 enum ConnectionStatus { connected, disconnected, reconnecting }
 
 class SshChatService {
-  static const String clientVersion = "1.0.1";
+  static const String clientVersion = "1.0.2";
 
   String? _host;
   int _port;
@@ -24,9 +24,7 @@ class SshChatService {
   bool _isReconnecting = false;
   Timer? _healthCheckTimer;
 
-  // --- MODIFICATION START: Add subscription for network connectivity ---
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
-  // --- MODIFICATION END ---
 
   String? _lastNickname;
   String? _lastKeyPath;
@@ -39,12 +37,14 @@ class SshChatService {
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
   final _versionStatusController = StreamController<String>.broadcast();
   final _connectionStatusController = StreamController<ConnectionStatus>.broadcast();
+  final _identityController = StreamController<String>.broadcast();
 
   Stream<List<SearchResult>> get searchResults => _searchResultController.stream;
   Stream<List<Transfer>> get transfers => _transferController.stream;
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
   Stream<String> get versionStatus => _versionStatusController.stream;
   Stream<ConnectionStatus> get connectionStatus => _connectionStatusController.stream;
+  Stream<String> get identity => _identityController.stream;
 
 
   SshChatService({int port = 2222}) : _port = port;
@@ -110,14 +110,12 @@ class SshChatService {
 
       if (_disposed) break;
 
-      // --- MODIFICATION: Check connectivity before attempting to reconnect ---
       final connectivityResult = await Connectivity().checkConnectivity();
       if (connectivityResult.contains(ConnectivityResult.none)) {
         print("Skipping reconnect attempt, no network connection.");
         attempt++;
         continue; // Skip this attempt and wait for the next cycle
       }
-      // --- END MODIFICATION ---
 
       try {
         await connect(
@@ -165,17 +163,13 @@ class SshChatService {
         _lastHost = host;
         unawaited(_checkServerVersion(host));
 
-        // --- MODIFICATION START: Set up the connectivity listener on initial connect ---
         _connectivitySubscription?.cancel();
         _connectivitySubscription = Connectivity().onConnectivityChanged.listen((List<ConnectivityResult> result) {
-            // The result is a list because you can have multiple connections (e.g. WiFi and mobile).
-            // We consider it disconnected only if all results are 'none'.
             if (result.contains(ConnectivityResult.none) && !result.any((r) => r != ConnectivityResult.none)) {
                 print("Connectivity changed to offline. Triggering disconnection.");
                 _handleDisconnection();
             }
         });
-        // --- MODIFICATION END ---
       }
 
       if (_host == null) throw Exception("Hostname not set.");
@@ -251,8 +245,15 @@ class SshChatService {
       try {
           final decoded = json.decode(msg) as Map<String, dynamic>;
           final type = decoded['type'] as String?;
+          final payload = decoded['payload'];
           if (_disposed) return;
           switch (type) {
+              case 'welcome':
+                  final identity = (payload as Map<String, dynamic>)['identity'] as String?;
+                  if(identity != null) {
+                    _identityController.add(identity);
+                  }
+                  break;
               case 'chat_broadcast':
               case 'system_broadcast':
               case 'network_stats':
@@ -271,12 +272,12 @@ class SshChatService {
                   });
           }
       } catch (e) {
-           if(!_disposed) {
-             _messageController.add({
-                 'type': 'system_broadcast',
-                 'payload': {'text': "Error parsing: $msg", 'isSystem': true}
-             });
-           }
+          if(!_disposed) {
+            _messageController.add({
+                'type': 'system_broadcast',
+                'payload': {'text': "Error parsing: $msg", 'isSystem': true}
+            });
+          }
       }
   }
 
@@ -288,7 +289,7 @@ class SshChatService {
       _disposed = true;
       _isReconnecting = false;
       _healthCheckTimer?.cancel();
-      _connectivitySubscription?.cancel(); // --- MODIFICATION: Cancel subscription
+      _connectivitySubscription?.cancel();
       _fileService?.dispose();
       _chatSession?.close();
       _client?.close();
@@ -297,5 +298,6 @@ class SshChatService {
       _messageController.close();
       _versionStatusController.close();
       _connectionStatusController.close();
+      _identityController.close();
   }
 }

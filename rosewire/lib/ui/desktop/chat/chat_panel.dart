@@ -1,3 +1,4 @@
+// CLIENT/ui/desktop/chat/chat_panel.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
@@ -144,15 +145,8 @@ class _ChatPanelState extends State<ChatPanel> {
                   }
 
                   final isMe = msg.isMe;
-                  // --- START FEDERATION UI LOGIC ---
-                  final parts = msg.fullAddress.split('@');
-                  final nickname = parts.length > 1 ? parts[1] : msg.fullAddress;
-                  final instance = parts.length > 2 ? parts[2] : '';
-                  final isRemote = instance.isNotEmpty && instance != _currentUserInstance;
-                  // --- END FEDERATION UI LOGIC ---
-
-                  // Use local nickname for "me" avatar, parsed nickname for others
-                  final avatarChar = (isMe ? widget.nickname : nickname).substring(0, 1).toUpperCase();
+                  final displayName = msg.fullAddress.split('@').elementAt(1);
+                  final avatarChar = (isMe ? widget.nickname : displayName).substring(0, 1).toUpperCase();
                   final avatarColor = isMe ? roseGreen : rosePink;
 
                   final avatar = CircleAvatar(
@@ -177,30 +171,13 @@ class _ChatPanelState extends State<ChatPanel> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           if (!isMe)
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  nickname,
-                                  style: const TextStyle(
-                                    color: rosePink,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                                if(isRemote)
-                                  Padding(
-                                    padding: const EdgeInsets.only(left: 4.0),
-                                    child: Text(
-                                      '@$instance',
-                                      style: TextStyle(
-                                        color: roseWhite.withOpacity(0.5),
-                                        fontWeight: FontWeight.normal,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ),
-                              ],
+                            Text(
+                              msg.fullAddress,
+                              style: const TextStyle(
+                                color: rosePink,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
                             ),
                           Text(
                             msg.text,

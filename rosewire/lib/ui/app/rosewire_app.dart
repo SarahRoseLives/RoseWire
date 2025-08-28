@@ -29,9 +29,11 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
   int _selectedTab = 3;
   String? _libraryPath;
   String _serverHost = 'rosewire.rosevines.network';
+  String _currentUserAddress = '';
 
   String? _versionWarning;
   StreamSubscription? _versionSubscription;
+  StreamSubscription? _identitySubscription;
   Timer? _shareRefreshTimer;
 
   ConnectionStatus _connectionStatus = ConnectionStatus.connected;
@@ -42,6 +44,7 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
   @override
   void dispose() {
     _versionSubscription?.cancel();
+    _identitySubscription?.cancel();
     _shareRefreshTimer?.cancel();
     _connectionStatusSubscription?.cancel();
     _chatService.dispose();
@@ -100,6 +103,14 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
       }
     });
 
+    _identitySubscription = _chatService.identity.listen((identity) {
+      if (mounted) {
+        setState(() {
+          _currentUserAddress = identity;
+        });
+      }
+    });
+
     final prefs = await SharedPreferences.getInstance();
     _serverHost = prefs.getString('rosewire_server') ?? 'rosewire.rosevines.network';
 
@@ -155,7 +166,6 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
   }
 
   List<Widget> get _tabs {
-    final currentUserAddress = '@${_nickname ?? ''}@$_serverHost';
     return [
       SearchPanelMobile(chatService: _chatService),
       TransfersPanelMobile(chatService: _chatService),
@@ -168,7 +178,7 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
       ChatPanelMobile(
         chatService: _chatService,
         nickname: _nickname ?? '',
-        currentUserAddress: currentUserAddress,
+        currentUserAddress: _currentUserAddress,
       ),
       NetworkPanelMobile(chatService: _chatService),
       const SettingsPanelMobile(),

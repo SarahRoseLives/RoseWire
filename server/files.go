@@ -49,16 +49,15 @@ func (r *FileRegistry) UpdateUserFiles(nickname string, fileList []SharedFile) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// An empty file list from a federated peer is a signal they have no files to share,
-	// but it still counts as an activity ping. A local user disconnecting will call
-	// RemoveUser directly.
-	if _, ok := r.files[nickname]; ok || len(fileList) > 0 {
-		r.files[nickname] = &UserFileEntry{
-			Files:       fileList,
-			LastUpdated: time.Now(),
-		}
-		log.Printf("Updated file list for %s with %d items.", nickname, len(fileList))
+	// Always update the entry for a user when we receive a "Share" activity.
+	// This ensures that even users with no files are registered and their
+	// activity timestamp is updated, keeping them "online" in the registry.
+	// An empty file list is a valid state.
+	r.files[nickname] = &UserFileEntry{
+		Files:       fileList,
+		LastUpdated: time.Now(),
 	}
+	log.Printf("Updated file list for %s with %d items.", nickname, len(fileList))
 }
 
 // RemoveUser clears all file information for a user (e.g., on local disconnect).

@@ -1,3 +1,4 @@
+// CLIENT/ui/app/network/network_panel.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
@@ -140,7 +141,16 @@ class _NetworkPanelMobileState extends State<NetworkPanelMobile> {
         ? Colors.greenAccent
         : Colors.white.withOpacity(0.6);
     final nickname = user["nickname"].toString();
-    final avatarChar = nickname.isNotEmpty ? nickname.substring(0, 1).toUpperCase() : '?';
+
+    // Extract the name part for the avatar, defaulting to the full string if format is unexpected
+    String nameForAvatar = nickname;
+    if (nickname.startsWith('@')) {
+        final parts = nickname.substring(1).split('@');
+        if (parts.isNotEmpty && parts[0].isNotEmpty) {
+            nameForAvatar = parts[0];
+        }
+    }
+    final avatarChar = nameForAvatar.isNotEmpty ? nameForAvatar.substring(0, 1).toUpperCase() : '?';
 
     return Card(
       color: Colors.grey[850],

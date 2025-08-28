@@ -1,3 +1,4 @@
+// CLIENT/ui/desktop/network/network_panel.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
@@ -31,11 +32,6 @@ class _NetworkPanelState extends State<NetworkPanel> {
         }
       }
     });
-    // -- REMOVE THESE TWO LINES --
-    // widget.chatService.requestStats();
-    // setState(() {
-    //   _loading = true;
-    // });
   }
 
   @override
@@ -129,6 +125,18 @@ class _NetworkPanelState extends State<NetworkPanel> {
                       final user = users[idx] as Map<String, dynamic>;
                       final statusColor =
                           user["status"] == "Online" ? roseGreen : roseWhite.withOpacity(0.6);
+                      final nickname = user["nickname"].toString();
+
+                      // Extract the name part for the avatar, defaulting to the full string if format is unexpected
+                      String nameForAvatar = nickname;
+                      if (nickname.startsWith('@')) {
+                          final parts = nickname.substring(1).split('@');
+                          if (parts.isNotEmpty && parts[0].isNotEmpty) {
+                              nameForAvatar = parts[0];
+                          }
+                      }
+                      final avatarChar = nameForAvatar.isNotEmpty ? nameForAvatar.substring(0, 1).toUpperCase() : '?';
+
                       return Card(
                         color: roseGray.withOpacity(0.8),
                         elevation: 2,
@@ -140,12 +148,12 @@ class _NetworkPanelState extends State<NetworkPanel> {
                           leading: CircleAvatar(
                             backgroundColor: rosePink,
                             child: Text(
-                              user["nickname"].toString().substring(0, 1).toUpperCase(),
+                              avatarChar,
                               style: TextStyle(color: roseWhite, fontWeight: FontWeight.bold),
                             ),
                           ),
                           title: Text(
-                            user["nickname"].toString(),
+                            nickname,
                             style: TextStyle(color: roseWhite, fontWeight: FontWeight.bold),
                           ),
                           trailing: Text(

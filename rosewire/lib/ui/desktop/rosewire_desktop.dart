@@ -43,11 +43,13 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
   String? _libraryFolder;
   List<File> _libraryFiles = [];
   String _serverHost = 'rosewire.rosevines.network';
+  String _currentUserAddress = '';
   String? _versionWarning;
   Timer? _shareRefreshTimer;
 
   ConnectionStatus _connectionStatus = ConnectionStatus.connected;
   StreamSubscription? _connectionStatusSubscription;
+  StreamSubscription? _identitySubscription;
 
 
   late List<Widget> _panels = [];
@@ -68,6 +70,16 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
       }
     });
 
+    _identitySubscription = _sshChatService.identity.listen((identity) {
+      if (mounted) {
+        setState(() {
+          _currentUserAddress = identity;
+        });
+        // Rebuild panels that depend on the address
+        _buildPanels();
+      }
+    });
+
     _sshChatService.versionStatus.listen((status) {
       if (status.startsWith("Warning:") && mounted) {
         setState(() {
@@ -81,7 +93,8 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
   }
 
   void _buildPanels() {
-    final currentUserAddress = '@${widget.nickname}@$_serverHost';
+    // Use the confirmed address if available, otherwise construct a temporary one.
+    final address = _currentUserAddress.isNotEmpty ? _currentUserAddress : '@${widget.nickname}@$_serverHost';
     setState(() {
       _panels = [
         SearchPanel(chatService: _sshChatService),
@@ -93,7 +106,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
         ChatPanel(
           nickname: widget.nickname,
           chatService: _sshChatService,
-          currentUserAddress: currentUserAddress,
+          currentUserAddress: address,
         ),
         NetworkPanel(chatService: _sshChatService),
         const SettingsPanel(),
@@ -173,6 +186,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
   void dispose() {
     _shareRefreshTimer?.cancel();
     _connectionStatusSubscription?.cancel();
+    _identitySubscription?.cancel();
     _sshChatService.dispose();
     super.dispose();
   }
