@@ -4,6 +4,8 @@
 
 RoseWire is a federated communication platform built on the principle that your data and identity should be your own. It combines the security of SSH with a modern, decentralized architecture, allowing anyone to host their own server instance while participating in a global network.
 
+You can find the 1st ever instance running at https://rosevines.network/
+
 ---
 
 ![RoseWire Desktop](screenshots/search.png)
