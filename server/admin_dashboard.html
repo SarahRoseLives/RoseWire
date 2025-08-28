@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><title>RoseWire Admin Dashboard</title>
+    <style>
+        body { font-family: sans-serif; background: #2c2f33; color: #fff; margin: 0; padding: 20px; }
+        .container { max-width: 1200px; margin: auto; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        header h1 { color: #ea4c89; margin: 0; }
+        header form button { color: #7289da; text-decoration: none; background: #23272a; padding: 8px 15px; border-radius: 5px; font-size: 1em; cursor: pointer; border: none; }
+        header form button:hover { background: #40444b; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; }
+        .panel { background: #23272a; padding: 20px; border-radius: 8px; }
+        .panel h2 { margin-top: 0; border-bottom: 2px solid #ea4c89; padding-bottom: 10px; }
+        ul { list-style: none; padding: 0; }
+        li { background: #40444b; padding: 10px; border-radius: 4px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .remove-btn { background: #f04747; color: white; border: none; cursor: pointer; padding: 5px 10px; border-radius: 4px; }
+        .form-group { display: flex; gap: 10px; margin-top: 15px; }
+        input[type="text"] { flex-grow: 1; padding: 8px; border-radius: 4px; border: 1px solid #7289da; background: #40444b; color: #fff; }
+        .add-btn { background: #43b581; color: white; border: none; cursor: pointer; padding: 8px 15px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>Admin Dashboard</h1>
+        <form action="/admin/logout" method="post">
+            <button type="submit">Logout</button>
+        </form>
+    </header>
+    <div class="grid">
+        <div class="panel" id="peers-panel">
+            <h2>Blocked Peers</h2>
+            <ul id="blocked-peers-list"></ul>
+            <div class="form-group">
+                <input type="text" id="peer-input" placeholder="example.com">
+                <button class="add-btn" onclick="addItem('peer', 'peer-input')">Block</button>
+            </div>
+        </div>
+        <div class="panel" id="users-panel">
+            <h2>Banned Users</h2>
+            <ul id="banned-users-list"></ul>
+            <div class="form-group">
+                <input type="text" id="user-input" placeholder="nickname">
+                <button class="add-btn" onclick="addItem('user', 'user-input')">Ban</button>
+            </div>
+        </div>
+        <div class="panel" id="filetypes-panel">
+            <h2>Blocked Filetypes</h2>
+            <ul id="blocked-filetypes-list"></ul>
+            <div class="form-group">
+                <input type="text" id="filetype-input" placeholder=".exe">
+                <button class="add-btn" onclick="addItem('filetype', 'filetype-input')">Block</button>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+    async function fetchConfig() {
+        const response = await fetch('/api/admin/config');
+        const config = await response.json();
+        renderList('blocked-peers-list', config.blocked_peers || [], 'peer');
+        renderList('banned-users-list', config.banned_users || [], 'user');
+        renderList('blocked-filetypes-list', config.blocked_file_types || [], 'filetype');
+    }
+
+    function renderList(listId, items, type) {
+        const listEl = document.getElementById(listId);
+        listEl.innerHTML = '';
+        if (!items || items.length === 0) {
+            listEl.innerHTML = '<li>None</li>';
+            return;
+        }
+        items.forEach(item => {
+            const li = document.createElement('li');
+            li.textContent = item;
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'remove-btn';
+            removeBtn.textContent = 'Remove';
+            removeBtn.onclick = () => updateItem('remove', type, item);
+            li.appendChild(removeBtn);
+            listEl.appendChild(li);
+        });
+    }
+
+    async function updateItem(action, type, value) {
+        if (!value) return;
+        const response = await fetch('/api/admin/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, type, value })
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`Error updating config: ${errorText}`);
+        }
+        fetchConfig();
+    }
+
+    function addItem(type, inputId) {
+        const input = document.getElementById(inputId);
+        const value = input.value.trim();
+        if (value) {
+            updateItem('add', type, value);
+            input.value = '';
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', fetchConfig);
+</script>
+</body>
+</html>

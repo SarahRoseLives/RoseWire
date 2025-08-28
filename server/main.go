@@ -361,6 +361,35 @@ func main() {
 		}
 	}
 
+	nickDB, err := LoadNickDB(nickDBFile)
+	if err != nil {
+		log.Fatalf("Failed to load nick DB: %v", err)
+	}
+
+	// Check for SYSTEM user registration on startup.
+	nickDB.Lock()
+	_, systemUserExists := nickDB.NickToKey["SYSTEM"]
+	nickDB.Unlock()
+	if !systemUserExists {
+		fmt.Println()
+		log.Println("*****************************************************************")
+		log.Println("* *")
+		log.Println("* ACTION REQUIRED                        *")
+		log.Println("* *")
+		log.Println("* The SYSTEM user has not been registered. This user is the     *")
+		log.Println("* administrator for this RoseWire instance.                     *")
+		log.Println("* *")
+		log.Println("* To register the admin, please log in from another terminal:   *")
+		log.Println("* *")
+		log.Printf("* ssh SYSTEM@%s                                        *", cfg.Domain)
+		log.Println("* *")
+		log.Println("* The first public key used will be permanently associated      *")
+		log.Println("* with the SYSTEM account. The server will continue to run.     *")
+		log.Println("* *")
+		log.Println("*****************************************************************")
+		fmt.Println()
+	}
+
 	instanceSigner, err := ensureInstanceKey(instanceKeyFile)
 	if err != nil {
 		log.Fatalf("Failed to load or generate instance key: %v", err)
@@ -369,11 +398,6 @@ func main() {
 	hostSigner, err := ensureHostKey(hostKeyFile)
 	if err != nil {
 		log.Fatalf("Failed to load host key: %v", err)
-	}
-
-	nickDB, err := LoadNickDB(nickDBFile)
-	if err != nil {
-		log.Fatalf("Failed to load nick DB: %v", err)
 	}
 
 	fileRegistry := NewFileRegistry()
@@ -412,10 +436,13 @@ func main() {
 
 			adminCfg.mu.RLock()
 			isBanned := false
-			for _, bannedUser := range adminCfg.BannedUsers {
-				if bannedUser == nick {
-					isBanned = true
-					break
+			// The SYSTEM user can never be banned.
+			if nick != "SYSTEM" {
+				for _, bannedUser := range adminCfg.BannedUsers {
+					if bannedUser == nick {
+						isBanned = true
+						break
+					}
 				}
 			}
 			adminCfg.mu.RUnlock()

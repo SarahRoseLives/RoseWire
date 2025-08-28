@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RoseWire Admin Login</title>
+    <style>
+        body { font-family: sans-serif; background: #2c2f33; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .login-box { background: #23272a; padding: 40px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); width: 300px; }
+        h1 { text-align: center; color: #ea4c89; margin-bottom: 24px; }
+        label { display: block; margin-bottom: 8px; color: #99aab5; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 10px; border-radius: 4px; border: 1px solid #7289da; background: #40444b; color: #fff; box-sizing: border-box; margin-bottom: 15px; }
+        button { width: 100%; padding: 12px; background: #7289da; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin-top: 20px; }
+        button:hover { background: #677bc4; }
+        .error { color: #f04747; text-align: center; margin-top: 15px; }
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <h1>RoseWire Admin</h1>
+        <form action="/admin/login" method="post">
+            <label for="username">Username:</label>
+            <input type="text" id="username" name="username" value="SYSTEM" readonly style="background:#333;">
+            <label for="password">Password:</label>
+            <input type="password" id="password" name="password" required autofocus>
+            <button type="submit">Login</button>
+        </form>
+        <script>
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('error') === 'invalid_credentials') {
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'error';
+                errorDiv.textContent = 'Invalid credentials.';
+                document.querySelector('form').appendChild(errorDiv);
+            }
+        </script>
+    </div>
+</body>
+</html>
