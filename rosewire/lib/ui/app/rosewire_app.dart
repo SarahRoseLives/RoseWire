@@ -30,19 +30,21 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
   String? _libraryPath;
   String _serverHost = 'rosewire.rosevines.network';
 
-  // --- START MODIFICATION ---
   String? _versionWarning;
   StreamSubscription? _versionSubscription;
-  // --- END MODIFICATION ---
+  // --- MODIFICATION START ---
+  Timer? _shareRefreshTimer;
+  // --- MODIFICATION END ---
 
   late final SshChatService _chatService = SshChatService();
 
   @override
   void dispose() {
-    // --- START MODIFICATION: Clean up subscription and service ---
     _versionSubscription?.cancel();
+    // --- MODIFICATION START ---
+    _shareRefreshTimer?.cancel();
+    // --- MODIFICATION END ---
     _chatService.dispose();
-    // --- END MODIFICATION ---
     super.dispose();
   }
 
@@ -60,8 +62,26 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
     return File('${dir.path}/${nickname}_rosewire_library.json');
   }
 
+  // --- MODIFICATION START: Create a reusable reshare function ---
+  Future<void> _reshareLibraryFiles() async {
+    if (_libraryPath == null) return;
+
+    final dir = Directory(_libraryPath!);
+    if (await dir.exists()) {
+      final files = await dir.list().where((f) => f is File).cast<File>().toList();
+      final filesPayload = files.map((file) {
+        return {
+          "Name": file.path.split('/').last,
+          "Size": file.lengthSync(),
+          "IsDir": false,
+        };
+      }).toList();
+      _chatService.shareFiles(filesPayload);
+    }
+  }
+  // --- MODIFICATION END ---
+
   Future<void> _initializeServicesAfterLogin(String nickname, String keyPath) async {
-    // --- START MODIFICATION: Listen for version status updates ---
     _versionSubscription = _chatService.versionStatus.listen((status) {
       if (status.startsWith("Warning:") && mounted) {
         setState(() {
@@ -74,7 +94,6 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
         });
       }
     });
-    // --- END MODIFICATION ---
 
     final prefs = await SharedPreferences.getInstance();
     _serverHost = prefs.getString('rosewire_server') ?? 'rosewire.rosevines.network';
@@ -111,18 +130,18 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
       host: _serverHost,
     );
 
-    final dir = Directory(_libraryPath!);
-    if (await dir.exists()) {
-       final files = await dir.list().where((f) => f is File).cast<File>().toList();
-       final filesPayload = files.map((file) {
-         return {
-           "Name": file.path.split('/').last,
-           "Size": file.lengthSync(),
-           "IsDir": false,
-         };
-       }).toList();
-      _chatService.shareFiles(filesPayload);
-    }
+    // Initial share
+    await _reshareLibraryFiles();
+
+    // --- MODIFICATION START: Schedule periodic reshares ---
+    _shareRefreshTimer?.cancel(); // Cancel any existing timer
+    _shareRefreshTimer = Timer.periodic(const Duration(minutes: 10), (_) {
+      if (_loggedIn) {
+        print("Refreshing file share to keep it alive...");
+        _reshareLibraryFiles();
+      }
+    });
+    // --- MODIFICATION END ---
   }
 
   void _handleLibraryChanged(String folderPath, List<Map<String, dynamic>> files) {
@@ -157,7 +176,6 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
     ];
   }
 
-  // --- START MODIFICATION: Helper for building the warning banner ---
   PreferredSizeWidget? _buildVersionWarningBanner() {
     if (_versionWarning == null) {
       return null;
@@ -180,7 +198,6 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
       ),
     );
   }
-  // --- END MODIFICATION ---
 
   @override
   Widget build(BuildContext context) {
@@ -196,9 +213,7 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
           fontSize: 20,
           fontWeight: FontWeight.bold,
         ),
-        // --- START MODIFICATION: Add the banner to the AppBar ---
         bottom: _buildVersionWarningBanner(),
-        // --- END MODIFICATION ---
       ),
       body: IndexedStack(
         index: _selectedTab,

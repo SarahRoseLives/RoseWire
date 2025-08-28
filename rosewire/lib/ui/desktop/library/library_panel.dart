@@ -1,5 +1,7 @@
+// CLIENT/ui/desktop/library/library_panel.dart
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart'; // <-- Import the new package
+import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 import '../rosewire_desktop.dart';
 import 'dart:io';
 import 'dart:convert';
@@ -25,6 +27,9 @@ class _LibraryPanelState extends State<LibraryPanel> {
   String? _error;
   String? _downloadsPath;
   bool _initialized = false;
+  // --- MODIFICATION START: Add a ScrollController ---
+  final ScrollController _scrollController = ScrollController();
+  // --- MODIFICATION END ---
 
   final String _configFilename = "rosewire_library.json";
 
@@ -33,6 +38,14 @@ class _LibraryPanelState extends State<LibraryPanel> {
     super.initState();
     _restoreLibrary();
   }
+
+  // --- MODIFICATION START: Dispose the controller ---
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+  // --- MODIFICATION END ---
 
   Future<File> _libraryConfigFile() async {
     final dir = await getApplicationSupportDirectory();
@@ -62,20 +75,61 @@ class _LibraryPanelState extends State<LibraryPanel> {
     });
   }
 
-  // UPDATED: This method now uses the file_picker package
   Future<void> _selectFolder() async {
-    // Use the file_picker package to show a native directory chooser.
-    String? selectedPath = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: 'Please select your RoseWire library folder',
-    );
+    setState(() {
+      _error = null; // Clear previous errors
+    });
 
+    String? selectedPath;
+
+    // 1. Try the standard FilePicker (uses xdg-desktop-portal)
+    try {
+      selectedPath = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: 'Please select your RoseWire library folder',
+      );
+    } catch (e) {
+      print('FilePicker (portal) failed: $e. Trying fallbacks...');
+      selectedPath = null;
+    }
+
+    // 2. If portal fails, try zenity (GTK)
+    if (selectedPath == null) {
+      try {
+        final result = await Process.run('zenity', ['--file-selection', '--directory']);
+        if (result.exitCode == 0) {
+          selectedPath = (result.stdout as String).trim();
+        }
+      } catch (e) {
+        print('Zenity not found or failed: $e');
+        selectedPath = null;
+      }
+    }
+
+    // 3. If zenity fails, try kdialog (KDE)
+    if (selectedPath == null) {
+      try {
+        final result = await Process.run('kdialog', ['--getexistingdirectory']);
+        if (result.exitCode == 0) {
+          selectedPath = (result.stdout as String).trim();
+        }
+      } catch (e) {
+        print('Kdialog not found or failed: $e');
+        selectedPath = null;
+      }
+    }
+
+    // 4. Handle the result
     if (selectedPath != null && selectedPath.isNotEmpty) {
       setState(() {
         _downloadsPath = selectedPath;
         _loading = true;
-        _error = null;
       });
       await _loadFilesFromFolder(selectedPath, persist: true);
+    } else {
+      // If all methods failed, show an error.
+      setState(() {
+        _error = 'Could not open folder picker.\nPlease ensure "zenity" or "kdialog" is installed on your system.';
+      });
     }
   }
 
@@ -88,12 +142,13 @@ class _LibraryPanelState extends State<LibraryPanel> {
             .where((f) => f is File)
             .toList();
 
-        setState(() {
-          _files = files;
-          _loading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _files = files;
+            _loading = false;
+          });
+        }
 
-        // Save the chosen library folder and file names
         if (persist) {
           final configFile = await _libraryConfigFile();
           final config = {
@@ -103,28 +158,29 @@ class _LibraryPanelState extends State<LibraryPanel> {
           await configFile.writeAsString(jsonEncode(config));
         }
 
-        // Notify parent (desktop) so it can trigger sharing
         widget.onLibraryChanged(
           folderPath,
           files.cast<File>(),
         );
       } else {
+        if (mounted) {
+          setState(() {
+            _files = [];
+            _loading = false;
+            _error = "Selected directory does not exist.";
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
         setState(() {
           _files = [];
           _loading = false;
-          _error = "Selected directory does not exist.";
+          _error = "Failed to load files: $e";
         });
       }
-    } catch (e) {
-      setState(() {
-        _files = [];
-        _loading = false;
-        _error = "Failed to load files: $e";
-      });
     }
   }
-
-  // REMOVED: The _showFolderPicker method is no longer needed.
 
   @override
   Widget build(BuildContext context) {
@@ -179,7 +235,8 @@ class _LibraryPanelState extends State<LibraryPanel> {
                             ? Center(
                                 child: Text(
                                   _error!,
-                                  style: TextStyle(color: roseWhite),
+                                  style: TextStyle(color: Colors.redAccent, fontSize: 16),
+                                  textAlign: TextAlign.center,
                                 ),
                               )
                             : _files.isEmpty
@@ -189,34 +246,41 @@ class _LibraryPanelState extends State<LibraryPanel> {
                                       style: TextStyle(color: roseWhite),
                                     ),
                                   )
-                                : ListView.builder(
-                                    itemCount: _files.length,
-                                    itemBuilder: (context, idx) {
-                                      final file = _files[idx] as File;
-                                      final name = file.path.split(Platform.pathSeparator).last;
-                                      final size = file.lengthSync();
-                                      return Card(
-                                        elevation: 2,
-                                        margin: EdgeInsets.symmetric(vertical: 8),
-                                        color: roseGray.withOpacity(0.85),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(16),
-                                          side: BorderSide(
-                                            color: rosePurple.withOpacity(0.2),
-                                            width: 1.2,
+                                // --- MODIFICATION START: Add Scrollbar ---
+                                : Scrollbar(
+                                    thumbVisibility: true,
+                                    controller: _scrollController,
+                                    child: ListView.builder(
+                                      controller: _scrollController,
+                                      itemCount: _files.length,
+                                      itemBuilder: (context, idx) {
+                                        final file = _files[idx] as File;
+                                        final name = file.path.split(Platform.pathSeparator).last;
+                                        final size = file.lengthSync();
+                                        return Card(
+                                          elevation: 2,
+                                          margin: EdgeInsets.symmetric(vertical: 8),
+                                          color: roseGray.withOpacity(0.85),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(16),
+                                            side: BorderSide(
+                                              color: rosePurple.withOpacity(0.2),
+                                              width: 1.2,
+                                            ),
                                           ),
-                                        ),
-                                        child: ListTile(
-                                          leading: Icon(Icons.insert_drive_file, color: rosePink),
-                                          title: Text(name, style: TextStyle(color: roseWhite, fontWeight: FontWeight.bold)),
-                                          subtitle: Text(
-                                            "${(size / (1024 * 1024)).toStringAsFixed(2)} MB",
-                                            style: TextStyle(color: roseWhite.withOpacity(0.7)),
+                                          child: ListTile(
+                                            leading: Icon(Icons.insert_drive_file, color: rosePink),
+                                            title: Text(name, style: TextStyle(color: roseWhite, fontWeight: FontWeight.bold)),
+                                            subtitle: Text(
+                                              "${(size / (1024 * 1024)).toStringAsFixed(2)} MB",
+                                              style: TextStyle(color: roseWhite.withOpacity(0.7)),
+                                            ),
                                           ),
-                                        ),
-                                      );
-                                    },
+                                        );
+                                      },
+                                    ),
                                   ),
+                                // --- MODIFICATION END ---
           ),
         ],
       ),

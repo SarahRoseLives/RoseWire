@@ -1,4 +1,5 @@
 // CLIENT/ui/desktop/rosewire_desktop.dart
+import 'dart:async'; // --- MODIFICATION: Add async import
 import 'dart:io';
 import 'dart:convert';
 import 'dart:ui';
@@ -40,6 +41,9 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
   List<File> _libraryFiles = [];
   String _serverHost = 'rosewire.rosevines.network'; // Store the current host
   String? _versionWarning;
+  // --- MODIFICATION START ---
+  Timer? _shareRefreshTimer;
+  // --- MODIFICATION END ---
 
   late List<Widget> _panels = []; // Initialize as empty
 
@@ -95,6 +99,16 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
       host: _serverHost,
     );
     await _restoreLibraryAndShare();
+
+    // --- MODIFICATION START: Schedule periodic reshares ---
+    _shareRefreshTimer?.cancel(); // Cancel any existing timer
+    _shareRefreshTimer = Timer.periodic(const Duration(minutes: 10), (_) {
+      if (mounted) {
+        print("Refreshing file share to keep it alive...");
+        _shareLibraryToServer();
+      }
+    });
+    // --- MODIFICATION END ---
   }
 
   Future<void> _restoreLibraryAndShare() async {
@@ -143,6 +157,9 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
 
   @override
   void dispose() {
+    // --- MODIFICATION START ---
+    _shareRefreshTimer?.cancel();
+    // --- MODIFICATION END ---
     _sshChatService.dispose();
     super.dispose();
   }
