@@ -4,6 +4,75 @@ import '../../../services/ssh_chat_service.dart';
 import '../../../models/search_result.dart';
 import '../rosewire_desktop.dart';
 
+// Helper function to get an icon based on the file extension.
+IconData _getIconForFile(String fileName) {
+  final extension = fileName.contains('.') ? fileName.split('.').last.toLowerCase() : '';
+  switch (extension) {
+    // Audio
+    case 'mp3':
+    case 'wav':
+    case 'aac':
+    case 'flac':
+    case 'ogg':
+    case 'm4a':
+      return Icons.music_note;
+    // Video
+    case 'mp4':
+    case 'mov':
+    case 'avi':
+    case 'mkv':
+    case 'webm':
+      return Icons.movie;
+    // Image
+    case 'jpg':
+    case 'jpeg':
+    case 'png':
+    case 'gif':
+    case 'bmp':
+    case 'webp':
+      return Icons.image;
+    // Archive
+    case 'zip':
+    case 'rar':
+    case '7z':
+    case 'tar':
+    case 'gz':
+      return Icons.archive;
+    // Document
+    case 'pdf':
+      return Icons.picture_as_pdf;
+    case 'doc':
+    case 'docx':
+      return Icons.description; // Generic document icon
+    case 'xls':
+    case 'xlsx':
+      return Icons.grid_on; // Spreadsheet icon
+    case 'ppt':
+    case 'pptx':
+      return Icons.slideshow; // Presentation icon
+    // Code/Text
+    case 'txt':
+    case 'md':
+    case 'log':
+      return Icons.article;
+    case 'json':
+    case 'xml':
+    case 'html':
+    case 'css':
+    case 'js':
+    case 'dart':
+    case 'py':
+    case 'java':
+    case 'c':
+    case 'cpp':
+    case 'sh':
+      return Icons.code;
+    // Default
+    default:
+      return Icons.insert_drive_file;
+  }
+}
+
 class SearchPanel extends StatefulWidget {
   final SshChatService chatService;
   const SearchPanel({super.key, required this.chatService});
@@ -98,9 +167,9 @@ class _SearchPanelState extends State<SearchPanel> {
             ),
           ),
           child: ListTile(
-            leading: const CircleAvatar(
+            leading: CircleAvatar(
               backgroundColor: rosePink,
-              child: Icon(Icons.music_note, color: roseWhite),
+              child: Icon(_getIconForFile(item.fileName), color: roseWhite),
             ),
             title: Text(item.fileName, style: const TextStyle(color: roseWhite, fontWeight: FontWeight.bold, fontSize: 16)),
             subtitle: Text(

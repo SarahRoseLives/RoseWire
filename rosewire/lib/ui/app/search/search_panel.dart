@@ -3,6 +3,76 @@ import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
 import '../../../models/search_result.dart';
 
+// Helper function to get an icon based on the file extension.
+IconData _getIconForFile(String fileName) {
+  final extension = fileName.contains('.') ? fileName.split('.').last.toLowerCase() : '';
+  switch (extension) {
+    // Audio
+    case 'mp3':
+    case 'wav':
+    case 'aac':
+    case 'flac':
+    case 'ogg':
+    case 'm4a':
+      return Icons.music_note;
+    // Video
+    case 'mp4':
+    case 'mov':
+    case 'avi':
+    case 'mkv':
+    case 'webm':
+      return Icons.movie;
+    // Image
+    case 'jpg':
+    case 'jpeg':
+    case 'png':
+    case 'gif':
+    case 'bmp':
+    case 'webp':
+      return Icons.image;
+    // Archive
+    case 'zip':
+    case 'rar':
+    case '7z':
+    case 'tar':
+    case 'gz':
+      return Icons.archive;
+    // Document
+    case 'pdf':
+      return Icons.picture_as_pdf;
+    case 'doc':
+    case 'docx':
+      return Icons.description; // Generic document icon
+    case 'xls':
+    case 'xlsx':
+      return Icons.grid_on; // Spreadsheet icon
+    case 'ppt':
+    case 'pptx':
+      return Icons.slideshow; // Presentation icon
+    // Code/Text
+    case 'txt':
+    case 'md':
+    case 'log':
+      return Icons.article;
+    case 'json':
+    case 'xml':
+    case 'html':
+    case 'css':
+    case 'js':
+    case 'dart':
+    case 'py':
+    case 'java':
+    case 'c':
+    case 'cpp':
+    case 'sh':
+      return Icons.code;
+    // Default
+    default:
+      return Icons.insert_drive_file;
+  }
+}
+
+
 class SearchPanelMobile extends StatefulWidget {
   final SshChatService chatService;
   const SearchPanelMobile({super.key, required this.chatService});
@@ -151,9 +221,9 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
             borderRadius: BorderRadius.circular(12),
           ),
           child: ListTile(
-            leading: const CircleAvatar(
+            leading: CircleAvatar(
               backgroundColor: Colors.pinkAccent,
-              child: Icon(Icons.music_note, color: Colors.white),
+              child: Icon(_getIconForFile(item.fileName), color: Colors.white),
             ),
             title: Text(
               item.fileName,
