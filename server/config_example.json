@@ -4,5 +4,8 @@
   "http_listen_addr": "0.0.0.0:8080",
   "cert_file": "fullchain.pem",
   "key_file": "privkey.pem",
-  "peers": ["rosewire.rosevines.network:8080"]
+  "peers": [
+    "rosewire.rosevines.network:8080",
+    "sarahsforge.dev:8080"
+  ]
 }

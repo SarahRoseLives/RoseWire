@@ -103,9 +103,13 @@ class SshChatService {
           final socket = await SSHSocket.connect(_host!, _port);
 
           _client = SSHClient(
-              socket,
-              username: nickname,
-              identities: SSHKeyPair.fromPem(privateKey),
+            socket,
+            username: nickname,
+            identities: SSHKeyPair.fromPem(privateKey),
+            // --- FIX: Add a keep-alive ping ---
+            // This sends a packet every 60 seconds to prevent network hardware
+            // from dropping the idle connection.
+            keepAliveInterval: const Duration(seconds: 60),
           );
 
           await _client!.authenticated;
@@ -187,10 +191,10 @@ class SshChatService {
           }
       } catch (e) {
            if(!_disposed) {
-              _messageController.add({
-                  'type': 'system_broadcast',
-                  'payload': {'text': "Error parsing: $msg", 'isSystem': true}
-              });
+             _messageController.add({
+                 'type': 'system_broadcast',
+                 'payload': {'text': "Error parsing: $msg", 'isSystem': true}
+             });
            }
       }
   }
