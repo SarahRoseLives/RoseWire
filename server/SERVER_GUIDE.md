@@ -131,7 +131,6 @@ With the server running manually, you must now register your administrative SSH 
 Launch your RoseWire app and configure a new connection with the following details:
 
 - **Host:** `YOURDOMAINHERE` (the domain from your `config.json`)
-- **Port:** `2222` (the SSH port from your `config.json`)
 - **Username:** `SYSTEM`
 
 Connect using the app. The server will automatically register the SSH public key your client uses.
