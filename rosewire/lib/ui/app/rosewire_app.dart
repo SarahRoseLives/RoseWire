@@ -258,12 +258,14 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
     if (!_loggedIn) {
       return LoginPanelMobile(onLogin: _onLogin);
     }
+    final theme = Theme.of(context);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('RoseWire'),
-        backgroundColor: Colors.pinkAccent,
-        titleTextStyle: const TextStyle(
-          color: Colors.white,
+        backgroundColor: theme.colorScheme.primary,
+        titleTextStyle: TextStyle(
+          color: theme.colorScheme.onPrimary,
           fontSize: 20,
           fontWeight: FontWeight.bold,
         ),
@@ -276,9 +278,9 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedTab,
         onTap: (idx) => setState(() => _selectedTab = idx),
-        selectedItemColor: Colors.pinkAccent,
+        selectedItemColor: theme.colorScheme.primary,
         unselectedItemColor: Colors.grey[400],
-        backgroundColor: Colors.grey[900],
+        backgroundColor: theme.colorScheme.surface,
         type: BottomNavigationBarType.fixed,
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.search), label: 'Search'),

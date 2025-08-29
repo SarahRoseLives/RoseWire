@@ -2,7 +2,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
-import '../rosewire_desktop.dart';
 
 class ChatPanel extends StatefulWidget {
   final SshChatService chatService;
@@ -49,8 +48,8 @@ class _ChatPanelState extends State<ChatPanel> {
         // Safely handle the nickname, which is now the full federated address.
         final fullAddress = payload['nickname'] as String?;
         if (fullAddress == null || fullAddress.isEmpty) {
-            print("Received chat_broadcast with no nickname. Skipping.");
-            return;
+          print("Received chat_broadcast with no nickname. Skipping.");
+          return;
         }
         final text = payload['text'] as String;
         newMessage = _ChatMessage(fullAddress, text, isMe: fullAddress == widget.currentUserAddress);
@@ -100,16 +99,18 @@ class _ChatPanelState extends State<ChatPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             "Global Network Chat",
             style: TextStyle(
               fontSize: 18,
-              color: roseWhite,
+              color: theme.colorScheme.onBackground,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -117,10 +118,10 @@ class _ChatPanelState extends State<ChatPanel> {
           Expanded(
             child: Container(
               decoration: BoxDecoration(
-                color: roseGray.withOpacity(0.7),
+                color: Colors.black.withOpacity(0.2),
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(
-                  color: rosePurple.withOpacity(0.15),
+                  color: theme.colorScheme.surface.withOpacity(0.5),
                   width: 2,
                 ),
               ),
@@ -137,7 +138,7 @@ class _ChatPanelState extends State<ChatPanel> {
                         msg.text,
                         textAlign: TextAlign.center,
                         style: TextStyle(
-                          color: roseWhite.withOpacity(0.6),
+                          color: theme.colorScheme.onSurface.withOpacity(0.6),
                           fontStyle: FontStyle.italic,
                         ),
                       ),
@@ -147,24 +148,26 @@ class _ChatPanelState extends State<ChatPanel> {
                   final isMe = msg.isMe;
                   final displayName = msg.fullAddress.split('@').elementAt(1);
                   final avatarChar = (isMe ? widget.nickname : displayName).substring(0, 1).toUpperCase();
-                  final avatarColor = isMe ? roseGreen : rosePink;
+                  final avatarColor = theme.colorScheme.secondary;
 
                   final avatar = CircleAvatar(
-                      radius: 16,
-                      backgroundColor: avatarColor,
-                      child: Text(
-                        avatarChar,
-                        style: const TextStyle(
-                          color: roseWhite, fontWeight: FontWeight.bold, fontSize: 16,
-                        ),
+                    radius: 16,
+                    backgroundColor: isMe ? theme.colorScheme.primary : avatarColor,
+                    child: Text(
+                      avatarChar,
+                      style: TextStyle(
+                        color: theme.colorScheme.onPrimary, fontWeight: FontWeight.bold, fontSize: 16,
                       ),
-                    );
+                    ),
+                  );
 
                   final bubble = Flexible(
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                       decoration: BoxDecoration(
-                        color: isMe ? rosePink.withOpacity(0.7) : rosePurple.withOpacity(0.2),
+                        color: isMe
+                            ? theme.colorScheme.primary.withOpacity(0.8)
+                            : theme.colorScheme.surface.withOpacity(0.5),
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: Column(
@@ -173,16 +176,16 @@ class _ChatPanelState extends State<ChatPanel> {
                           if (!isMe)
                             Text(
                               msg.fullAddress,
-                              style: const TextStyle(
-                                color: rosePink,
+                              style: TextStyle(
+                                color: theme.colorScheme.primary,
                                 fontWeight: FontWeight.bold,
                                 fontSize: 13,
                               ),
                             ),
                           Text(
                             msg.text,
-                            style: const TextStyle(
-                              color: roseWhite,
+                            style: TextStyle(
+                              color: isMe ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface,
                               fontSize: 15,
                             ),
                           ),
@@ -197,8 +200,8 @@ class _ChatPanelState extends State<ChatPanel> {
                       mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: isMe
-                        ? [ bubble, const SizedBox(width: 8), avatar ]
-                        : [ avatar, const SizedBox(width: 8), bubble ],
+                          ? [ bubble, const SizedBox(width: 8), avatar ]
+                          : [ avatar, const SizedBox(width: 8), bubble ],
                     ),
                   );
                 },
@@ -213,16 +216,16 @@ class _ChatPanelState extends State<ChatPanel> {
                   controller: _chatController,
                   decoration: InputDecoration(
                     hintText: "Type a message...",
-                    hintStyle: TextStyle(color: roseWhite.withOpacity(0.4)),
+                    hintStyle: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.4)),
                     filled: true,
-                    fillColor: roseGray.withOpacity(0.8),
+                    fillColor: Colors.black.withOpacity(0.2),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                       borderSide: BorderSide.none,
                     ),
                     contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
                   ),
-                  style: const TextStyle(color: roseWhite, fontSize: 15),
+                  style: TextStyle(color: theme.colorScheme.onSurface, fontSize: 15),
                   onSubmitted: (_) => _sendMessage(),
                 ),
               ),
@@ -231,8 +234,6 @@ class _ChatPanelState extends State<ChatPanel> {
                 icon: const Icon(Icons.send),
                 label: const Text("Send"),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: rosePink,
-                  foregroundColor: roseWhite,
                   padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   elevation: 0,

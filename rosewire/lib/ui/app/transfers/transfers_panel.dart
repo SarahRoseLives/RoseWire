@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_file_service.dart';
 import '../../../services/ssh_chat_service.dart';
+import '../../../theme_manager.dart'; // Corrected import
 
 class TransfersPanelMobile extends StatefulWidget {
   final SshChatService chatService;
@@ -20,8 +21,6 @@ class _TransfersPanelMobileState extends State<TransfersPanelMobile> {
     super.initState();
 
     // Get the current list of transfers when the panel first loads.
-    // This ensures that if transfers were started on another screen,
-    // they appear immediately when the user navigates here.
     _transfers = widget.chatService.getCurrentTransfers();
 
     // Subscribe to all future updates to the transfer list.
@@ -42,8 +41,6 @@ class _TransfersPanelMobileState extends State<TransfersPanelMobile> {
     _transferSubscription?.cancel();
     super.dispose();
   }
-
-  // Helper methods to determine UI elements based on transfer status.
 
   String _statusText(TransferStatus status) {
     switch (status) {
@@ -71,28 +68,29 @@ class _TransfersPanelMobileState extends State<TransfersPanelMobile> {
     }
   }
 
-  Color _statusColor(TransferStatus status) {
+  Color _statusColor(BuildContext context, TransferStatus status) {
     switch (status) {
       case TransferStatus.pending:
-        return Colors.white.withOpacity(0.8);
+        return Theme.of(context).colorScheme.onSurface.withOpacity(0.8);
       case TransferStatus.active:
-        return Colors.pinkAccent;
+        return Theme.of(context).colorScheme.primary;
       case TransferStatus.complete:
-        return Colors.greenAccent;
+        return statusGreen;
       case TransferStatus.failed:
-        return Colors.redAccent;
+        return statusRed;
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
-      backgroundColor: Colors.grey[900],
+      backgroundColor: theme.scaffoldBackgroundColor,
       body: _transfers.isEmpty
           ? Center(
               child: Text(
                 "No active or recent transfers.",
-                style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 16),
+                style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.7), fontSize: 16),
               ),
             )
           : ListView.builder(
@@ -100,12 +98,12 @@ class _TransfersPanelMobileState extends State<TransfersPanelMobile> {
               itemCount: _transfers.length,
               itemBuilder: (context, idx) {
                 final item = _transfers[idx];
-                final color = _statusColor(item.status);
+                final color = _statusColor(context, item.status);
 
                 return Card(
                   elevation: 3,
                   margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
-                  color: Colors.grey[850],
+                  color: theme.colorScheme.surface,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                     side: BorderSide(color: color.withOpacity(0.2), width: 1),
@@ -119,11 +117,11 @@ class _TransfersPanelMobileState extends State<TransfersPanelMobile> {
                           leading: Icon(_statusIcon(item.status), color: color, size: 36),
                           title: Text(
                             item.fileName,
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                            style: TextStyle(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold, fontSize: 16),
                           ),
                           subtitle: Text(
                             "${_statusText(item.status)} from ${item.fromUser}",
-                            style: TextStyle(color: Colors.white.withOpacity(0.7)),
+                            style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.7)),
                           ),
                         ),
                         if (item.status == TransferStatus.active || item.status == TransferStatus.complete)
@@ -155,7 +153,7 @@ class _TransfersPanelMobileState extends State<TransfersPanelMobile> {
                             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                             child: Text(
                               "Error: ${item.error}",
-                              style: TextStyle(color: Colors.redAccent.withOpacity(0.9), fontSize: 12),
+                              style: TextStyle(color: statusRed.withOpacity(0.9), fontSize: 12),
                             ),
                           ),
                       ],

@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
+import '../../../theme_manager.dart'; // Corrected import
 
 class NetworkPanelMobile extends StatefulWidget {
   final SshChatService chatService;
@@ -19,7 +20,6 @@ class _NetworkPanelMobileState extends State<NetworkPanelMobile> {
   @override
   void initState() {
     super.initState();
-    // Listen to all messages from the service to catch 'network_stats' updates
     _statsSub = widget.chatService.messages.listen((msg) {
       if (msg['type'] == 'network_stats') {
         if (mounted) {
@@ -31,7 +31,6 @@ class _NetworkPanelMobileState extends State<NetworkPanelMobile> {
       }
     });
 
-    // Request the initial stats when the panel is loaded
     widget.chatService.requestStats();
   }
 
@@ -55,7 +54,7 @@ class _NetworkPanelMobileState extends State<NetworkPanelMobile> {
     final activeTransfers = stats?['activeTransfers'] ?? 0;
 
     return Scaffold(
-      backgroundColor: Colors.grey[900],
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: RefreshIndicator(
         onRefresh: () async {
           widget.chatService.requestStats();
@@ -74,7 +73,7 @@ class _NetworkPanelMobileState extends State<NetworkPanelMobile> {
               "Users on the Network",
               style: TextStyle(
                 fontSize: 18,
-                color: Colors.white.withOpacity(0.9),
+                color: Theme.of(context).colorScheme.onBackground.withOpacity(0.9),
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -100,6 +99,7 @@ class _NetworkPanelMobileState extends State<NetworkPanelMobile> {
     required int activeTransfers,
     required int totalTransfers,
   }) {
+    final theme = Theme.of(context);
     return GridView.count(
       crossAxisCount: 2,
       shrinkWrap: true,
@@ -112,7 +112,7 @@ class _NetworkPanelMobileState extends State<NetworkPanelMobile> {
           icon: Icons.people_alt,
           label: "Users Online",
           value: "$totalUsers",
-          color: Colors.pinkAccent,
+          color: theme.colorScheme.primary,
         ),
         _StatItem(
           icon: Icons.cloud_sync,
@@ -124,25 +124,25 @@ class _NetworkPanelMobileState extends State<NetworkPanelMobile> {
           icon: Icons.swap_vertical_circle,
           label: "Active Transfers",
           value: "$activeTransfers",
-          color: Colors.greenAccent,
+          color: theme.colorScheme.secondary,
         ),
         _StatItem(
           icon: Icons.library_music,
           label: "Total Transfers",
           value: "$totalTransfers",
-          color: Colors.white,
+          color: theme.colorScheme.onSurface,
         ),
       ],
     );
   }
 
   Widget _buildUserCard(Map<String, dynamic> user) {
+    final theme = Theme.of(context);
     final statusColor = user["status"] == "Online"
-        ? Colors.greenAccent
-        : Colors.white.withOpacity(0.6);
+        ? statusGreen
+        : theme.colorScheme.onSurface.withOpacity(0.6);
     final nickname = user["nickname"].toString();
 
-    // Extract the name part for the avatar, defaulting to the full string if format is unexpected
     String nameForAvatar = nickname;
     if (nickname.startsWith('@')) {
         final parts = nickname.substring(1).split('@');
@@ -153,7 +153,7 @@ class _NetworkPanelMobileState extends State<NetworkPanelMobile> {
     final avatarChar = nameForAvatar.isNotEmpty ? nameForAvatar.substring(0, 1).toUpperCase() : '?';
 
     return Card(
-      color: Colors.grey[850],
+      color: theme.colorScheme.surface,
       elevation: 2,
       margin: const EdgeInsets.symmetric(vertical: 5),
       shape: RoundedRectangleBorder(
@@ -161,15 +161,15 @@ class _NetworkPanelMobileState extends State<NetworkPanelMobile> {
       ),
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor: Colors.pinkAccent,
+          backgroundColor: theme.colorScheme.primary,
           child: Text(
             avatarChar,
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            style: TextStyle(color: theme.colorScheme.onPrimary, fontWeight: FontWeight.bold),
           ),
         ),
         title: Text(
           nickname,
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          style: TextStyle(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold),
           overflow: TextOverflow.ellipsis,
         ),
         trailing: Text(
@@ -199,8 +199,9 @@ class _StatItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Card(
-      color: Colors.grey[850],
+      color: theme.colorScheme.surface,
       elevation: 4,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
@@ -224,7 +225,7 @@ class _StatItem extends StatelessWidget {
             label,
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Colors.white.withOpacity(0.7),
+              color: theme.colorScheme.onSurface.withOpacity(0.7),
               fontSize: 13,
             ),
           ),

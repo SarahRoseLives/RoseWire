@@ -8,44 +8,51 @@ import 'ui/desktop/rosewire_desktop.dart';
 // Mobile-specific UI root
 import 'ui/app/rosewire_app.dart';
 
-void main() {
+// Import the new ThemeManager
+import 'theme_manager.dart';
+
+void main() async {
+  // Ensure widgets are initialized before loading the theme
+  WidgetsFlutterBinding.ensureInitialized();
+  await themeManager.loadTheme();
+
   // Check if the platform is mobile (Android or iOS)
   // and run the corresponding app version.
   if (Platform.isAndroid || Platform.isIOS) {
-    runApp(const RoseWireMobileApp());
+    runApp(const RoseWireMobileWrapper());
   } else {
-    runApp(const RoseWireDesktopApp());
+    runApp(const RoseWireDesktopWrapper());
   }
 }
 
-/// A wrapper for the Mobile UI.
-/// This provides the MaterialApp needed for the mobile screens.
-class RoseWireMobileApp extends StatelessWidget {
-  const RoseWireMobileApp({super.key});
+/// A wrapper for the Mobile UI that listens to theme changes.
+class RoseWireMobileWrapper extends StatelessWidget {
+  const RoseWireMobileWrapper({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'RoseWire',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        useMaterial3: true,
-      ),
-      home: const RoseWireAppMobile(), // The root widget for mobile
+    return AnimatedBuilder(
+      animation: themeManager,
+      builder: (context, child) {
+        return MaterialApp(
+          title: 'RoseWire',
+          debugShowCheckedModeBanner: false,
+          theme: themeManager.themeData,
+          home: const RoseWireAppMobile(), // The root widget for mobile
+        );
+      },
     );
   }
 }
 
-/// The original app class, renamed to specify it's for Desktop.
-/// Its logic remains the same.
-class RoseWireDesktopApp extends StatefulWidget {
-  const RoseWireDesktopApp({super.key});
+/// A wrapper for the Desktop UI that listens to theme changes.
+class RoseWireDesktopWrapper extends StatefulWidget {
+  const RoseWireDesktopWrapper({super.key});
   @override
-  State<RoseWireDesktopApp> createState() => _RoseWireDesktopAppState();
+  State<RoseWireDesktopWrapper> createState() => _RoseWireDesktopWrapperState();
 }
 
-class _RoseWireDesktopAppState extends State<RoseWireDesktopApp> {
+class _RoseWireDesktopWrapperState extends State<RoseWireDesktopWrapper> {
   bool _loggedIn = false;
   String? _nickname;
   String? _keyPath; // Path to selected private key
@@ -60,16 +67,18 @@ class _RoseWireDesktopAppState extends State<RoseWireDesktopApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'RoseWire',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        useMaterial3: true,
-      ),
-      home: _loggedIn
-          ? RoseWireDesktop(nickname: _nickname!, keyPath: _keyPath!)
-          : LoginPanel(onLogin: _onLogin),
+    return AnimatedBuilder(
+      animation: themeManager,
+      builder: (context, child) {
+        return MaterialApp(
+          title: 'RoseWire',
+          debugShowCheckedModeBanner: false,
+          theme: themeManager.themeData,
+          home: _loggedIn
+              ? RoseWireDesktop(nickname: _nickname!, keyPath: _keyPath!)
+              : LoginPanel(onLogin: _onLogin),
+        );
+      },
     );
   }
 }

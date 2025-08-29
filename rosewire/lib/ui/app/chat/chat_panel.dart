@@ -100,8 +100,9 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
-      backgroundColor: Colors.grey[900],
+      backgroundColor: theme.scaffoldBackgroundColor,
       body: Column(
         children: [
           Expanded(
@@ -119,7 +120,7 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
                       msg.text,
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.6),
+                        color: theme.colorScheme.onBackground.withOpacity(0.6),
                         fontStyle: FontStyle.italic,
                       ),
                     ),
@@ -134,7 +135,7 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                     decoration: BoxDecoration(
-                      color: isMe ? Colors.pinkAccent : Colors.grey[800],
+                      color: isMe ? theme.colorScheme.primary : theme.colorScheme.surface,
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: Column(
@@ -145,8 +146,8 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
                             padding: const EdgeInsets.only(bottom: 4.0),
                             child: Text(
                               msg.fullAddress,
-                              style: const TextStyle(
-                                color: Colors.pinkAccent,
+                              style: TextStyle(
+                                color: theme.colorScheme.primary,
                                 fontWeight: FontWeight.bold,
                                 fontSize: 13,
                               ),
@@ -154,8 +155,8 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
                           ),
                         Text(
                           msg.text,
-                          style: const TextStyle(
-                            color: Colors.white,
+                          style: TextStyle(
+                            color: isMe ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface,
                             fontSize: 15,
                           ),
                         ),
@@ -173,12 +174,13 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
   }
 
   Widget _buildChatInput() {
+    final theme = Theme.of(context);
     return Container(
       padding: const EdgeInsets.all(8.0),
       decoration: BoxDecoration(
-        color: Colors.grey[850],
+        color: theme.colorScheme.surface,
         border: Border(
-          top: BorderSide(color: Colors.pinkAccent.withOpacity(0.5), width: 1),
+          top: BorderSide(color: theme.colorScheme.primary.withOpacity(0.5), width: 1),
         ),
       ),
       child: Row(
@@ -188,22 +190,22 @@ class _ChatPanelMobileState extends State<ChatPanelMobile> {
               controller: _chatController,
               decoration: InputDecoration(
                 hintText: "Type a message...",
-                hintStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
+                hintStyle: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.5)),
                 filled: true,
-                fillColor: Colors.grey[800],
+                fillColor: theme.scaffoldBackgroundColor,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(20),
                   borderSide: BorderSide.none,
                 ),
                 contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
               ),
-              style: const TextStyle(color: Colors.white, fontSize: 15),
+              style: TextStyle(color: theme.colorScheme.onSurface, fontSize: 15),
               onSubmitted: (_) => _sendMessage(),
             ),
           ),
           const SizedBox(width: 8),
           IconButton(
-            icon: const Icon(Icons.send, color: Colors.pinkAccent),
+            icon: Icon(Icons.send, color: theme.colorScheme.primary),
             onPressed: _sendMessage,
           ),
         ],

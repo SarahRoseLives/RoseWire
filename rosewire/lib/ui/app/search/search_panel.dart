@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
 import '../../../models/search_result.dart';
+import '../../../theme_manager.dart'; // Corrected import
 
 // Helper function to get an icon based on the file extension.
 IconData _getIconForFile(String fileName) {
@@ -147,7 +148,7 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[900],
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: Column(
         children: [
           _buildSearchBar(),
@@ -158,6 +159,7 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
   }
 
   Widget _buildSearchBar() {
+    final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.all(12.0),
       child: Row(
@@ -167,23 +169,23 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
               controller: _searchController,
               decoration: InputDecoration(
                 hintText: "Search for files...",
-                hintStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
+                hintStyle: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.5)),
                 filled: true,
-                fillColor: Colors.grey[800],
-                prefixIcon: const Icon(Icons.search, color: Colors.pinkAccent),
+                fillColor: theme.colorScheme.surface,
+                prefixIcon: Icon(Icons.search, color: theme.colorScheme.primary),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(20),
                   borderSide: BorderSide.none,
                 ),
                 contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
               ),
-              style: const TextStyle(color: Colors.white, fontSize: 15),
+              style: TextStyle(color: theme.colorScheme.onSurface, fontSize: 15),
               onSubmitted: (_) => _performSearch(),
             ),
           ),
           const SizedBox(width: 8),
           IconButton(
-            icon: const Icon(Icons.search, color: Colors.pinkAccent, size: 30),
+            icon: Icon(Icons.search, color: theme.colorScheme.primary, size: 30),
             onPressed: _performSearch,
           ),
         ],
@@ -192,6 +194,7 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
   }
 
   Widget _buildBody() {
+    final theme = Theme.of(context);
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -203,7 +206,7 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
               ? 'No results found for your query.'
               : 'No shared files available on the network.',
           textAlign: TextAlign.center,
-          style: const TextStyle(color: Colors.white70, fontSize: 16),
+          style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.7), fontSize: 16),
         ),
       );
     }
@@ -216,26 +219,25 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
         return Card(
           elevation: 3,
           margin: const EdgeInsets.symmetric(vertical: 6),
-          color: Colors.grey[850],
+          color: theme.colorScheme.surface,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
           child: ListTile(
             leading: CircleAvatar(
-              backgroundColor: Colors.pinkAccent,
-              child: Icon(_getIconForFile(item.fileName), color: Colors.white),
+              backgroundColor: theme.colorScheme.primary,
+              child: Icon(_getIconForFile(item.fileName), color: theme.colorScheme.onPrimary),
             ),
             title: Text(
               item.fileName,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              style: TextStyle(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold),
             ),
             subtitle: Text(
-              // Display the full peer address for clarity in search results
               "Size: ${item.formattedSize} • From: ${item.peer}",
-              style: TextStyle(color: Colors.white.withOpacity(0.7)),
+              style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.7)),
             ),
             trailing: IconButton(
-              icon: const Icon(Icons.download_for_offline, color: Colors.greenAccent),
+              icon: const Icon(Icons.download_for_offline, color: statusGreen),
               onPressed: () => _downloadFile(item),
               tooltip: "Download File",
             ),

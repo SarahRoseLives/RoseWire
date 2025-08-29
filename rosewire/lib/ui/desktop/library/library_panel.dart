@@ -1,10 +1,11 @@
+// CLIENT/ui/desktop/library/library_panel.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
-import '../rosewire_desktop.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
+import '../../../theme_manager.dart'; // Corrected import
 
 // Helper function to get an icon based on the file extension.
 IconData _getIconForFile(String fileName) {
@@ -147,7 +148,6 @@ class _LibraryPanelState extends State<LibraryPanel> {
 
     String? selectedPath;
 
-    // 1. Try the standard FilePicker (uses xdg-desktop-portal)
     try {
       selectedPath = await FilePicker.platform.getDirectoryPath(
         dialogTitle: 'Please select your RoseWire library folder',
@@ -157,7 +157,6 @@ class _LibraryPanelState extends State<LibraryPanel> {
       selectedPath = null;
     }
 
-    // 2. If portal fails, try zenity (GTK)
     if (selectedPath == null) {
       try {
         final result = await Process.run('zenity', ['--file-selection', '--directory']);
@@ -170,7 +169,6 @@ class _LibraryPanelState extends State<LibraryPanel> {
       }
     }
 
-    // 3. If zenity fails, try kdialog (KDE)
     if (selectedPath == null) {
       try {
         final result = await Process.run('kdialog', ['--getexistingdirectory']);
@@ -183,7 +181,6 @@ class _LibraryPanelState extends State<LibraryPanel> {
       }
     }
 
-    // 4. Handle the result
     if (selectedPath != null && selectedPath.isNotEmpty) {
       setState(() {
         _downloadsPath = selectedPath;
@@ -191,7 +188,6 @@ class _LibraryPanelState extends State<LibraryPanel> {
       });
       await _loadFilesFromFolder(selectedPath, persist: true);
     } else {
-      // If all methods failed, show an error.
       setState(() {
         _error = 'Could not open folder picker.\nPlease ensure "zenity" or "kdialog" is installed on your system.';
       });
@@ -249,6 +245,7 @@ class _LibraryPanelState extends State<LibraryPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
       child: Column(
@@ -256,12 +253,12 @@ class _LibraryPanelState extends State<LibraryPanel> {
         children: [
           Row(
             children: [
-              Flexible( // Use Flexible to prevent overflow
+              Flexible(
                 child: Text(
                   "My Library (${_downloadsPath ?? "Choose Folder"})",
                   style: TextStyle(
                     fontSize: 18,
-                    color: roseWhite,
+                    color: theme.colorScheme.onBackground,
                     fontWeight: FontWeight.w600,
                   ),
                   overflow: TextOverflow.ellipsis,
@@ -271,10 +268,8 @@ class _LibraryPanelState extends State<LibraryPanel> {
               ElevatedButton.icon(
                 icon: Icon(Icons.folder_open),
                 label: Text("Select Folder"),
-                onPressed: _selectFolder, // This now opens the GUI chooser
+                onPressed: _selectFolder,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: rosePink,
-                  foregroundColor: roseWhite,
                   padding: EdgeInsets.symmetric(horizontal: 18, vertical: 10),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
@@ -284,14 +279,12 @@ class _LibraryPanelState extends State<LibraryPanel> {
           SizedBox(height: 18),
           Expanded(
             child: _downloadsPath == null && !_initialized
-                ? Center(
-                    child: CircularProgressIndicator(),
-                  )
+                ? Center(child: CircularProgressIndicator())
                 : _downloadsPath == null
                     ? Center(
                         child: Text(
                           "Please select your downloads folder.",
-                          style: TextStyle(color: roseWhite),
+                          style: TextStyle(color: theme.colorScheme.onSurface),
                         ),
                       )
                     : _loading
@@ -300,7 +293,7 @@ class _LibraryPanelState extends State<LibraryPanel> {
                             ? Center(
                                 child: Text(
                                   _error!,
-                                  style: TextStyle(color: Colors.redAccent, fontSize: 16),
+                                  style: TextStyle(color: theme.colorScheme.error, fontSize: 16),
                                   textAlign: TextAlign.center,
                                 ),
                               )
@@ -308,7 +301,7 @@ class _LibraryPanelState extends State<LibraryPanel> {
                                 ? Center(
                                     child: Text(
                                       "No files found in selected folder.",
-                                      style: TextStyle(color: roseWhite),
+                                      style: TextStyle(color: theme.colorScheme.onSurface),
                                     ),
                                   )
                                 : Scrollbar(
@@ -324,20 +317,20 @@ class _LibraryPanelState extends State<LibraryPanel> {
                                         return Card(
                                           elevation: 2,
                                           margin: EdgeInsets.symmetric(vertical: 8),
-                                          color: roseGray.withOpacity(0.85),
+                                          color: theme.colorScheme.surface.withOpacity(0.5),
                                           shape: RoundedRectangleBorder(
                                             borderRadius: BorderRadius.circular(16),
                                             side: BorderSide(
-                                              color: rosePurple.withOpacity(0.2),
+                                              color: theme.colorScheme.surface,
                                               width: 1.2,
                                             ),
                                           ),
                                           child: ListTile(
-                                            leading: Icon(_getIconForFile(name), color: rosePink),
-                                            title: Text(name, style: TextStyle(color: roseWhite, fontWeight: FontWeight.bold)),
+                                            leading: Icon(_getIconForFile(name), color: theme.colorScheme.primary),
+                                            title: Text(name, style: TextStyle(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold)),
                                             subtitle: Text(
                                               "${(size / (1024 * 1024)).toStringAsFixed(2)} MB",
-                                              style: TextStyle(color: roseWhite.withOpacity(0.7)),
+                                              style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.7)),
                                             ),
                                           ),
                                         );

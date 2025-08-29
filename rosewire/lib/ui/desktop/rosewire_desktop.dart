@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/ssh_chat_service.dart';
+import '../../theme_manager.dart';
 import 'search/search_panel.dart';
 import 'transfers/transfers_panel.dart';
 import 'library/library_panel.dart';
@@ -15,16 +16,6 @@ import 'chat/chat_panel.dart';
 import 'network/network_panel.dart';
 import 'settings/settings_panel.dart';
 import 'about/about_panel.dart';
-
-// Shared colors
-const rosePink = Color(0xFFEA4C89);
-const rosePurple = Color(0xFF6C3483);
-const roseWhite = Colors.white;
-const roseGray = Color(0xFF22232A);
-const roseGreen = Color(0xFF26C281);
-const roseOrange = Colors.orange;
-const roseRed = Colors.redAccent;
-
 
 class RoseWireDesktop extends StatefulWidget {
   final String nickname;
@@ -196,58 +187,68 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
     super.dispose();
   }
 
-  final List<NavigationRailDestination> _destinations = const [
-    NavigationRailDestination(
-      icon: Icon(Icons.search),
-      selectedIcon: Icon(Icons.search, color: rosePink),
-      label: Text('Search'),
-    ),
-    NavigationRailDestination(
-      icon: Icon(Icons.swap_vertical_circle),
-      selectedIcon: Icon(Icons.swap_vertical_circle, color: rosePink),
-      label: Text('Transfers'),
-    ),
-    NavigationRailDestination(
-      icon: Icon(Icons.library_music),
-      selectedIcon: Icon(Icons.library_music, color: rosePink),
-      label: Text('Library'),
-    ),
-    NavigationRailDestination(
-      icon: Icon(Icons.chat),
-      selectedIcon: Icon(Icons.chat, color: rosePink),
-      label: Text('Chat'),
-    ),
-    NavigationRailDestination(
-      icon: Icon(Icons.cloud),
-      selectedIcon: Icon(Icons.cloud, color: rosePink),
-      label: Text('Network'),
-    ),
-    NavigationRailDestination(
-      icon: Icon(Icons.settings),
-      selectedIcon: Icon(Icons.settings, color: rosePink),
-      label: Text('Settings'),
-    ),
-  ];
-
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final rosePurple = theme.colorScheme.surface.withOpacity(0.5);
+
+    // --- CHANGE: Define contrasting icon color based on theme ---
+    final selectedIconColor = theme.colorScheme.primary == Colors.white ? Colors.black : Colors.white;
+
+    final destinations = [
+      NavigationRailDestination(
+        icon: const Icon(Icons.search),
+        selectedIcon: Icon(Icons.search, color: selectedIconColor),
+        label: const Text('Search'),
+      ),
+      NavigationRailDestination(
+        icon: const Icon(Icons.swap_vertical_circle),
+        selectedIcon:
+            Icon(Icons.swap_vertical_circle, color: selectedIconColor),
+        label: const Text('Transfers'),
+      ),
+      NavigationRailDestination(
+        icon: const Icon(Icons.library_music),
+        selectedIcon:
+            Icon(Icons.library_music, color: selectedIconColor),
+        label: const Text('Library'),
+      ),
+      NavigationRailDestination(
+        icon: const Icon(Icons.chat),
+        selectedIcon: Icon(Icons.chat, color: selectedIconColor),
+        label: const Text('Chat'),
+      ),
+      NavigationRailDestination(
+        icon: const Icon(Icons.cloud),
+        selectedIcon: Icon(Icons.cloud, color: selectedIconColor),
+        label: const Text('Network'),
+      ),
+      NavigationRailDestination(
+        icon: const Icon(Icons.settings),
+        selectedIcon: Icon(Icons.settings, color: selectedIconColor),
+        label: const Text('Settings'),
+      ),
+    ];
+
     return Scaffold(
       body: Row(
         children: [
           NavigationRail(
-            backgroundColor: roseGray.withOpacity(0.95),
-            selectedIndex: _selectedPanelIndex.clamp(0, _destinations.length - 1),
-            onDestinationSelected: (idx) => setState(() => _selectedPanelIndex = idx),
+            backgroundColor: theme.colorScheme.surface.withOpacity(0.5),
+            selectedIndex: _selectedPanelIndex.clamp(0, destinations.length - 1),
+            onDestinationSelected: (idx) =>
+                setState(() => _selectedPanelIndex = idx),
             labelType: NavigationRailLabelType.all,
             leading: Padding(
               padding: const EdgeInsets.all(12.0),
               child: CircleAvatar(
-                backgroundColor: rosePink,
+                backgroundColor: theme.colorScheme.primary,
                 radius: 22,
-                child: Icon(Icons.cable_rounded, color: roseWhite, size: 26),
+                child: Icon(Icons.cable_rounded,
+                    color: theme.colorScheme.onPrimary, size: 26),
               ),
             ),
-            destinations: _destinations,
+            destinations: destinations,
             trailing: Expanded(
               child: Align(
                 alignment: Alignment.bottomCenter,
@@ -266,14 +267,18 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
             child: Container(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [roseGray, rosePurple.withOpacity(0.3)],
+                  colors: [
+                    theme.colorScheme.surface,
+                    theme.colorScheme.primary.withOpacity(0.1)
+                  ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
               ),
               child: Center(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 850, maxHeight: 600),
+                  constraints:
+                      const BoxConstraints(maxWidth: 850, maxHeight: 600),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(32),
                     child: BackdropFilter(
@@ -297,17 +302,20 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
                             ),
                             if (_versionWarning != null)
                               Container(
-                                color: Colors.orange[800],
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                color: statusOrange,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 8),
                                 child: Text(
                                   _versionWarning!,
                                   textAlign: TextAlign.center,
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold),
                                 ),
                               ),
                             Expanded(
                               child: _panels.isEmpty
-                                  ? Center(child: CircularProgressIndicator())
+                                  ? const Center(child: CircularProgressIndicator())
                                   : IndexedStack(
                                       index: _selectedPanelIndex,
                                       children: _panels,
@@ -338,6 +346,7 @@ class _RoseWireHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Container(
       height: 72,
       padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -345,19 +354,19 @@ class _RoseWireHeader extends StatelessWidget {
         color: Colors.black.withOpacity(0.30),
         border: Border(
           bottom: BorderSide(
-            color: rosePurple.withOpacity(0.6),
+            color: theme.colorScheme.surface.withOpacity(0.8),
             width: 2,
           ),
         ),
       ),
       child: Row(
         children: [
-          const Text(
+          Text(
             'RoseWire',
             style: TextStyle(
               fontSize: 34,
               fontWeight: FontWeight.bold,
-              color: rosePink,
+              color: theme.colorScheme.primary,
               letterSpacing: 2,
               fontFamily: 'Segoe UI',
             ),
@@ -366,13 +375,13 @@ class _RoseWireHeader extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
             decoration: BoxDecoration(
-              color: rosePurple.withOpacity(0.2),
+              color: theme.colorScheme.surface.withOpacity(0.2),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
               'powered by SSH',
               style: TextStyle(
-                color: roseWhite.withOpacity(0.8),
+                color: theme.colorScheme.onSurface.withOpacity(0.8),
                 fontWeight: FontWeight.w600,
                 fontSize: 14,
               ),
@@ -381,8 +390,8 @@ class _RoseWireHeader extends StatelessWidget {
           const Spacer(),
           Text(
             nickname,
-            style: const TextStyle(
-              color: roseWhite,
+            style: TextStyle(
+              color: theme.colorScheme.onSurface,
               fontWeight: FontWeight.bold,
               fontSize: 16,
             ),
@@ -401,6 +410,7 @@ class _RoseWireStatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     IconData icon;
     Color color;
     String text;
@@ -408,17 +418,17 @@ class _RoseWireStatusBar extends StatelessWidget {
     switch (status) {
       case ConnectionStatus.connected:
         icon = Icons.lock;
-        color = roseGreen;
+        color = statusGreen;
         text = "Connected via SSH as $nickname";
         break;
       case ConnectionStatus.reconnecting:
         icon = Icons.sync_problem;
-        color = roseOrange;
+        color = statusOrange;
         text = "Connection lost. Reconnecting...";
         break;
       case ConnectionStatus.disconnected:
         icon = Icons.cloud_off;
-        color = roseRed;
+        color = statusRed;
         text = "Offline. Could not connect to the server.";
         break;
     }
@@ -430,7 +440,7 @@ class _RoseWireStatusBar extends StatelessWidget {
         color: Colors.black.withOpacity(0.30),
         border: Border(
           top: BorderSide(
-            color: rosePurple.withOpacity(0.5),
+            color: theme.colorScheme.surface.withOpacity(0.7),
             width: 2,
           ),
         ),
@@ -451,7 +461,7 @@ class _RoseWireStatusBar extends StatelessWidget {
           Text(
             "RoseWire 2.0 - Modern Edition",
             style: TextStyle(
-              color: roseWhite.withOpacity(0.8),
+              color: theme.colorScheme.onSurface.withOpacity(0.8),
               fontSize: 13,
             ),
           ),

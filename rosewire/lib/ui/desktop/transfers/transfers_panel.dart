@@ -2,14 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_file_service.dart';
 import '../../../services/ssh_chat_service.dart';
-import '../rosewire_desktop.dart';
-
-// Use the same colors as the rest of your UI
-const rosePink = Color(0xFFEA4C89);
-const rosePurple = Color(0xFF6C3483);
-const roseWhite = Colors.white;
-const roseGray = Color(0xFF22232A);
-const roseGreen = Color(0xFF26C281);
+import '../../../theme_manager.dart'; // Corrected import
 
 class TransfersPanel extends StatefulWidget {
   final SshChatService chatService;
@@ -27,16 +20,11 @@ class _TransfersPanelState extends State<TransfersPanel> {
   void initState() {
     super.initState();
 
-    // Get the current list of transfers upon panel initialization.
-    // This prevents an empty panel if transfers were initiated before this
-    // widget was built and subscribed to the stream.
     _transfers = widget.chatService.getCurrentTransfers();
 
-    // Then, subscribe to all future updates to the transfer list.
     _transferSubscription = widget.chatService.transfers.listen((updatedTransfers) {
       if (mounted) {
         setState(() {
-          // The service now sends back the complete list, so just replace it.
           _transfers = updatedTransfers;
         });
       }
@@ -75,48 +63,49 @@ class _TransfersPanelState extends State<TransfersPanel> {
     }
   }
 
-  Color _statusColor(TransferStatus status) {
-     switch (status) {
+  Color _statusColor(BuildContext context, TransferStatus status) {
+    switch (status) {
       case TransferStatus.pending:
-        return roseWhite.withOpacity(0.8);
+        return Theme.of(context).colorScheme.onSurface.withOpacity(0.8);
       case TransferStatus.active:
-        return rosePink;
+        return Theme.of(context).colorScheme.primary;
       case TransferStatus.complete:
-        return roseGreen;
+        return statusGreen;
       case TransferStatus.failed:
-        return Colors.redAccent;
+        return statusRed;
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             "File Transfers",
             style: TextStyle(
               fontSize: 18,
-              color: roseWhite,
+              color: theme.colorScheme.onBackground,
               fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 18),
           Expanded(
             child: _transfers.isEmpty
-                ? const Center(child: Text("No active or recent transfers.", style: TextStyle(color: roseWhite)))
+                ? Center(child: Text("No active or recent transfers.", style: TextStyle(color: theme.colorScheme.onSurface)))
                 : ListView.builder(
                     itemCount: _transfers.length,
                     itemBuilder: (context, idx) {
                       final item = _transfers[idx];
-                      final color = _statusColor(item.status);
+                      final color = _statusColor(context, item.status);
 
                       return Card(
                         elevation: 3,
                         margin: const EdgeInsets.symmetric(vertical: 8),
-                        color: roseGray.withOpacity(0.85),
+                        color: theme.colorScheme.surface.withOpacity(0.5),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                           side: BorderSide(
@@ -128,50 +117,50 @@ class _TransfersPanelState extends State<TransfersPanel> {
                           padding: const EdgeInsets.symmetric(vertical: 8.0),
                           child: ListTile(
                             leading: Icon(_statusIcon(item.status), color: color, size: 32),
-                            title: Text(item.fileName, style: const TextStyle(color: roseWhite, fontWeight: FontWeight.bold)),
+                            title: Text(item.fileName, style: TextStyle(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold)),
                             subtitle: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 const SizedBox(height: 4),
                                 Text(
                                   "${_statusText(item.status)} from ${item.fromUser}",
-                                  style: TextStyle(color: roseWhite.withOpacity(0.7)),
+                                  style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.7)),
                                 ),
                                 if (item.status == TransferStatus.failed && item.error.isNotEmpty)
                                   Padding(
                                     padding: const EdgeInsets.only(top: 4.0),
                                     child: Text(
                                       item.error,
-                                      style: TextStyle(color: Colors.redAccent.withOpacity(0.9), fontSize: 12),
+                                      style: TextStyle(color: statusRed.withOpacity(0.9), fontSize: 12),
                                     ),
                                   ),
                               ],
                             ),
                             trailing: (item.status == TransferStatus.active || item.status == TransferStatus.complete)
-                              ? SizedBox(
-                                  width: 120,
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: [
-                                      Text(
-                                        item.status == TransferStatus.active && item.speed.isNotEmpty
-                                            ? item.speed
-                                            : "${(item.progress * 100).toStringAsFixed(0)}%",
-                                        style: TextStyle(color: color, fontWeight: FontWeight.bold),
-                                      ),
-                                      const SizedBox(height: 6),
-                                      LinearProgressIndicator(
-                                        value: item.progress,
-                                        color: color,
-                                        backgroundColor: color.withOpacity(0.2),
-                                        minHeight: 6,
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                    ],
-                                  ),
-                                )
-                              : null,
+                                ? SizedBox(
+                                    width: 120,
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      crossAxisAlignment: CrossAxisAlignment.end,
+                                      children: [
+                                        Text(
+                                          item.status == TransferStatus.active && item.speed.isNotEmpty
+                                              ? item.speed
+                                              : "${(item.progress * 100).toStringAsFixed(0)}%",
+                                          style: TextStyle(color: color, fontWeight: FontWeight.bold),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        LinearProgressIndicator(
+                                          value: item.progress,
+                                          color: color,
+                                          backgroundColor: color.withOpacity(0.2),
+                                          minHeight: 6,
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                      ],
+                                    ),
+                                  )
+                                : null,
                           ),
                         ),
                       );

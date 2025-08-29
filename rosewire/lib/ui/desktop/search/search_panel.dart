@@ -1,8 +1,9 @@
+// CLIENT/ui/desktop/search/search_panel.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
 import '../../../models/search_result.dart';
-import '../rosewire_desktop.dart';
+import '../../../theme_manager.dart'; // Corrected import
 
 // Helper function to get an icon based on the file extension.
 IconData _getIconForFile(String fileName) {
@@ -136,6 +137,8 @@ class _SearchPanelState extends State<SearchPanel> {
   }
 
   Widget _buildBody() {
+    final theme = Theme.of(context);
+
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -146,7 +149,7 @@ class _SearchPanelState extends State<SearchPanel> {
           _hasSearched
               ? 'No results found for your query.'
               : 'No shared files available.',
-          style: const TextStyle(color: roseWhite, fontSize: 16),
+          style: TextStyle(color: theme.colorScheme.onBackground, fontSize: 16),
         ),
       );
     }
@@ -158,26 +161,26 @@ class _SearchPanelState extends State<SearchPanel> {
         return Card(
           elevation: 4,
           margin: const EdgeInsets.symmetric(vertical: 8),
-          color: roseGray.withOpacity(0.85),
+          color: theme.colorScheme.surface.withOpacity(0.5),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
             side: BorderSide(
-              color: rosePink.withOpacity(0.2),
+              color: theme.colorScheme.primary.withOpacity(0.2),
               width: 1.2,
             ),
           ),
           child: ListTile(
             leading: CircleAvatar(
-              backgroundColor: rosePink,
-              child: Icon(_getIconForFile(item.fileName), color: roseWhite),
+              backgroundColor: theme.colorScheme.primary,
+              child: Icon(_getIconForFile(item.fileName), color: theme.colorScheme.onPrimary),
             ),
-            title: Text(item.fileName, style: const TextStyle(color: roseWhite, fontWeight: FontWeight.bold, fontSize: 16)),
+            title: Text(item.fileName, style: TextStyle(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold, fontSize: 16)),
             subtitle: Text(
               "Size: ${item.formattedSize} • From: ${item.peer}",
-              style: TextStyle(color: roseWhite.withOpacity(0.7)),
+              style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.7)),
             ),
             trailing: IconButton(
-              icon: const Icon(Icons.download_for_offline, color: roseGreen),
+              icon: const Icon(Icons.download_for_offline, color: statusGreen),
               onPressed: () => _downloadFile(item),
               tooltip: "Download File",
             ),
@@ -189,16 +192,17 @@ class _SearchPanelState extends State<SearchPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             "Search for files on the network",
             style: TextStyle(
               fontSize: 18,
-              color: roseWhite,
+              color: theme.colorScheme.onBackground,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -211,19 +215,19 @@ class _SearchPanelState extends State<SearchPanel> {
                   decoration: InputDecoration(
                     hintText: "Type your search...",
                     hintStyle: TextStyle(
-                      color: roseWhite.withOpacity(0.4),
+                      color: theme.colorScheme.onSurface.withOpacity(0.4),
                       fontSize: 15,
                     ),
                     filled: true,
-                    fillColor: roseGray.withOpacity(0.8),
+                    fillColor: Colors.black.withOpacity(0.2),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                       borderSide: BorderSide.none,
                     ),
-                    prefixIcon: const Icon(Icons.search, color: rosePink),
+                    prefixIcon: Icon(Icons.search, color: theme.colorScheme.primary),
                     contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
                   ),
-                  style: const TextStyle(color: roseWhite, fontSize: 15),
+                  style: TextStyle(color: theme.colorScheme.onSurface, fontSize: 15),
                   onSubmitted: (_) => _performSearch(),
                 ),
               ),
@@ -232,8 +236,6 @@ class _SearchPanelState extends State<SearchPanel> {
                 icon: const Icon(Icons.search),
                 label: const Text("Search"),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: rosePink,
-                  foregroundColor: roseWhite,
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
                   textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
