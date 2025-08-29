@@ -155,7 +155,9 @@ class _TransfersPanelState extends State<TransfersPanel> {
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
                                       Text(
-                                        "${(item.progress * 100).toStringAsFixed(0)}%",
+                                        item.status == TransferStatus.active && item.speed.isNotEmpty
+                                            ? item.speed
+                                            : "${(item.progress * 100).toStringAsFixed(0)}%",
                                         style: TextStyle(color: color, fontWeight: FontWeight.bold),
                                       ),
                                       const SizedBox(height: 6),

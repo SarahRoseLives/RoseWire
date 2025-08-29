@@ -5,6 +5,76 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../../services/ssh_chat_service.dart';
 
+// Helper function to get an icon based on the file extension.
+IconData _getIconForFile(String fileName) {
+  final extension = fileName.contains('.') ? fileName.split('.').last.toLowerCase() : '';
+  switch (extension) {
+    // Audio
+    case 'mp3':
+    case 'wav':
+    case 'aac':
+    case 'flac':
+    case 'ogg':
+    case 'm4a':
+      return Icons.music_note;
+    // Video
+    case 'mp4':
+    case 'mov':
+    case 'avi':
+    case 'mkv':
+    case 'webm':
+      return Icons.movie;
+    // Image
+    case 'jpg':
+    case 'jpeg':
+    case 'png':
+    case 'gif':
+    case 'bmp':
+    case 'webp':
+      return Icons.image;
+    // Archive
+    case 'zip':
+    case 'rar':
+    case '7z':
+    case 'tar':
+    case 'gz':
+      return Icons.archive;
+    // Document
+    case 'pdf':
+      return Icons.picture_as_pdf;
+    case 'doc':
+    case 'docx':
+      return Icons.description; // Generic document icon
+    case 'xls':
+    case 'xlsx':
+      return Icons.grid_on; // Spreadsheet icon
+    case 'ppt':
+    case 'pptx':
+      return Icons.slideshow; // Presentation icon
+    // Code/Text
+    case 'txt':
+    case 'md':
+    case 'log':
+      return Icons.article;
+    case 'json':
+    case 'xml':
+    case 'html':
+    case 'css':
+    case 'js':
+    case 'dart':
+    case 'py':
+    case 'java':
+    case 'c':
+    case 'cpp':
+    case 'sh':
+      return Icons.code;
+    // Default
+    default:
+      return Icons.insert_drive_file;
+  }
+}
+
+
 class LibraryPanelMobile extends StatefulWidget {
   final String nickname;
   final SshChatService chatService;
@@ -196,7 +266,7 @@ class _LibraryPanelMobileState extends State<LibraryPanelMobile> {
           margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
           color: Colors.grey[850],
           child: ListTile(
-            leading: const Icon(Icons.insert_drive_file, color: Colors.pinkAccent),
+            leading: Icon(_getIconForFile(name), color: Colors.pinkAccent),
             title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             subtitle: Text(
               formattedSize,

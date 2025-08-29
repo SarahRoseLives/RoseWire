@@ -1,4 +1,3 @@
-// CLIENT/ui/desktop/library/library_panel.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
@@ -6,6 +5,76 @@ import '../rosewire_desktop.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
+
+// Helper function to get an icon based on the file extension.
+IconData _getIconForFile(String fileName) {
+  final extension = fileName.contains('.') ? fileName.split('.').last.toLowerCase() : '';
+  switch (extension) {
+    // Audio
+    case 'mp3':
+    case 'wav':
+    case 'aac':
+    case 'flac':
+    case 'ogg':
+    case 'm4a':
+      return Icons.music_note;
+    // Video
+    case 'mp4':
+    case 'mov':
+    case 'avi':
+    case 'mkv':
+    case 'webm':
+      return Icons.movie;
+    // Image
+    case 'jpg':
+    case 'jpeg':
+    case 'png':
+    case 'gif':
+    case 'bmp':
+    case 'webp':
+      return Icons.image;
+    // Archive
+    case 'zip':
+    case 'rar':
+    case '7z':
+    case 'tar':
+    case 'gz':
+      return Icons.archive;
+    // Document
+    case 'pdf':
+      return Icons.picture_as_pdf;
+    case 'doc':
+    case 'docx':
+      return Icons.description; // Generic document icon
+    case 'xls':
+    case 'xlsx':
+      return Icons.grid_on; // Spreadsheet icon
+    case 'ppt':
+    case 'pptx':
+      return Icons.slideshow; // Presentation icon
+    // Code/Text
+    case 'txt':
+    case 'md':
+    case 'log':
+      return Icons.article;
+    case 'json':
+    case 'xml':
+    case 'html':
+    case 'css':
+    case 'js':
+    case 'dart':
+    case 'py':
+    case 'java':
+    case 'c':
+    case 'cpp':
+    case 'sh':
+      return Icons.code;
+    // Default
+    default:
+      return Icons.insert_drive_file;
+  }
+}
+
 
 class LibraryPanel extends StatefulWidget {
   final String nickname;
@@ -27,9 +96,7 @@ class _LibraryPanelState extends State<LibraryPanel> {
   String? _error;
   String? _downloadsPath;
   bool _initialized = false;
-  // --- MODIFICATION START: Add a ScrollController ---
   final ScrollController _scrollController = ScrollController();
-  // --- MODIFICATION END ---
 
   final String _configFilename = "rosewire_library.json";
 
@@ -39,13 +106,11 @@ class _LibraryPanelState extends State<LibraryPanel> {
     _restoreLibrary();
   }
 
-  // --- MODIFICATION START: Dispose the controller ---
   @override
   void dispose() {
     _scrollController.dispose();
     super.dispose();
   }
-  // --- MODIFICATION END ---
 
   Future<File> _libraryConfigFile() async {
     final dir = await getApplicationSupportDirectory();
@@ -246,7 +311,6 @@ class _LibraryPanelState extends State<LibraryPanel> {
                                       style: TextStyle(color: roseWhite),
                                     ),
                                   )
-                                // --- MODIFICATION START: Add Scrollbar ---
                                 : Scrollbar(
                                     thumbVisibility: true,
                                     controller: _scrollController,
@@ -269,7 +333,7 @@ class _LibraryPanelState extends State<LibraryPanel> {
                                             ),
                                           ),
                                           child: ListTile(
-                                            leading: Icon(Icons.insert_drive_file, color: rosePink),
+                                            leading: Icon(_getIconForFile(name), color: rosePink),
                                             title: Text(name, style: TextStyle(color: roseWhite, fontWeight: FontWeight.bold)),
                                             subtitle: Text(
                                               "${(size / (1024 * 1024)).toStringAsFixed(2)} MB",
@@ -280,7 +344,6 @@ class _LibraryPanelState extends State<LibraryPanel> {
                                       },
                                     ),
                                   ),
-                                // --- MODIFICATION END ---
           ),
         ],
       ),

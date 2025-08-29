@@ -1,4 +1,3 @@
-// CLIENT/ui/desktop/search/search_panel.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
@@ -174,18 +173,14 @@ class _SearchPanelState extends State<SearchPanel> {
             ),
             title: Text(item.fileName, style: const TextStyle(color: roseWhite, fontWeight: FontWeight.bold, fontSize: 16)),
             subtitle: Text(
-              item.formattedSize,
+              "Size: ${item.formattedSize} • From: ${item.peer}",
               style: TextStyle(color: roseWhite.withOpacity(0.7)),
             ),
-            trailing: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(item.peer, style: const TextStyle(color: rosePink, fontWeight: FontWeight.bold)),
-                Text("Peer", style: TextStyle(color: roseWhite.withOpacity(0.6), fontSize: 12)),
-              ],
+            trailing: IconButton(
+              icon: const Icon(Icons.download_for_offline, color: roseGreen),
+              onPressed: () => _downloadFile(item),
+              tooltip: "Download File",
             ),
-            onTap: () => _downloadFile(item),
           ),
         );
       },

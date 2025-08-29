@@ -142,7 +142,9 @@ class _TransfersPanelMobileState extends State<TransfersPanelMobile> {
                                 ),
                                 const SizedBox(width: 12),
                                 Text(
-                                  "${(item.progress * 100).toStringAsFixed(0)}%",
+                                  item.status == TransferStatus.active && item.speed.isNotEmpty
+                                      ? item.speed
+                                      : "${(item.progress * 100).toStringAsFixed(0)}%",
                                   style: TextStyle(color: color, fontWeight: FontWeight.bold),
                                 ),
                               ],
