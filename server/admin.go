@@ -34,6 +34,14 @@ type AdminConfig struct {
 	BlockedFileTypes      []string `json:"blocked_file_types"`
 }
 
+// AdminConfigResponse defines the structure of the JSON sent to the admin UI.
+// It combines BannedUsers and BlockedFederatedUsers for easier rendering.
+type AdminConfigResponse struct {
+	BlockedPeers     []string `json:"blocked_peers"`
+	UserBlocklist    []string `json:"user_blocklist"`
+	BlockedFileTypes []string `json:"blocked_file_types"`
+}
+
 // AdminHandler manages all HTTP requests for the admin panel.
 type AdminHandler struct {
 	Store       *sessions.CookieStore
@@ -214,12 +222,25 @@ func (h *AdminHandler) ServeAdminPanel(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, h.DashHTML)
 }
 
-// HandleGetConfig returns the current admin configuration as JSON.
+// HandleGetConfig returns the current admin configuration as JSON,
+// with user ban/block lists combined for easy UI rendering.
 func (h *AdminHandler) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
 	h.AdminConfig.mu.RLock()
 	defer h.AdminConfig.mu.RUnlock()
+
+	// Create a combined list for the UI from the two underlying lists.
+	userBlocklist := make([]string, 0, len(h.AdminConfig.BannedUsers)+len(h.AdminConfig.BlockedFederatedUsers))
+	userBlocklist = append(userBlocklist, h.AdminConfig.BannedUsers...)
+	userBlocklist = append(userBlocklist, h.AdminConfig.BlockedFederatedUsers...)
+
+	response := AdminConfigResponse{
+		BlockedPeers:     h.AdminConfig.BlockedPeers,
+		UserBlocklist:    userBlocklist,
+		BlockedFileTypes: h.AdminConfig.BlockedFileTypes,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(h.AdminConfig)
+	json.NewEncoder(w).Encode(response)
 }
 
 // HandleUpdateConfig adds or removes items from the admin config lists.
@@ -248,12 +269,10 @@ func (h *AdminHandler) HandleUpdateConfig(w http.ResponseWriter, r *http.Request
 	case "peer":
 		list = &h.AdminConfig.BlockedPeers
 	case "user":
+		// Differentiate between local and federated users based on '@'
 		if strings.Contains(req.Value, "@") {
-			// This is a federated user, add to the block list.
 			list = &h.AdminConfig.BlockedFederatedUsers
 		} else {
-			// This is a local user, add to the ban list.
-			// The SYSTEM user cannot be banned.
 			if req.Value == "system" {
 				http.Error(w, "Cannot ban the SYSTEM user", http.StatusBadRequest)
 				return
@@ -261,7 +280,6 @@ func (h *AdminHandler) HandleUpdateConfig(w http.ResponseWriter, r *http.Request
 			list = &h.AdminConfig.BannedUsers
 		}
 	case "filetype":
-		// Ensure filetypes start with a dot
 		if !strings.HasPrefix(req.Value, ".") {
 			req.Value = "." + req.Value
 		}
@@ -271,9 +289,8 @@ func (h *AdminHandler) HandleUpdateConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Update the list
+	// Update the appropriate list
 	if req.Action == "add" {
-		// Avoid duplicates
 		found := false
 		for _, item := range *list {
 			if item == req.Value {
@@ -297,11 +314,9 @@ func (h *AdminHandler) HandleUpdateConfig(w http.ResponseWriter, r *http.Request
 	// For user actions, disconnect local users or purge remote user files.
 	if req.Type == "user" && req.Action == "add" {
 		if strings.Contains(req.Value, "@") {
-			// This is a federated user; remove their files from the local registry.
 			log.Printf("Admin: Blocking federated user %s and removing their files.", req.Value)
 			h.ChatHub.fileRegistry.RemoveUser(req.Value)
 		} else {
-			// This is a local user; disconnect them if they are online.
 			federatedName := fmt.Sprintf("@%s@%s", req.Value, h.ChatHub.config.Domain)
 			h.ChatHub.mu.Lock()
 			if client, ok := h.ChatHub.clients[federatedName]; ok {

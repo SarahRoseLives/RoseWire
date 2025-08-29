@@ -126,6 +126,11 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
       keyPath: widget.keyPath,
       host: _serverHost,
     );
+
+    // Trigger initial data fetches now that the connection is live.
+    _sshChatService.fetchTopFiles();
+    _sshChatService.requestStats();
+
     await _restoreLibraryAndShare();
 
     _shareRefreshTimer?.cancel();

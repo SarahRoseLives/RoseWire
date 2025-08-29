@@ -1,3 +1,4 @@
+// CLIENT/ui/desktop/search/search_panel.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
@@ -99,7 +100,7 @@ class _SearchPanelState extends State<SearchPanel> {
         });
       }
     });
-    widget.chatService.fetchTopFiles();
+    // DO NOT fetch here; the parent widget will trigger it post-connection.
   }
 
   @override
