@@ -12,7 +12,7 @@ import '../models/search_result.dart';
 enum ConnectionStatus { connected, disconnected, reconnecting }
 
 class SshChatService {
-  static const String clientVersion = "1.0.2";
+  static const String clientVersion = "1.0.3";
 
   String? _host;
   int _port;

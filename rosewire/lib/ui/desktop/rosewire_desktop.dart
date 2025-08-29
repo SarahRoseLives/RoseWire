@@ -56,6 +56,7 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
         setState(() {
           _connectionStatus = status;
         });
+        // When connection is established (or re-established), share the library.
         if (status == ConnectionStatus.connected) {
           _shareLibraryToServer();
         }
@@ -107,24 +108,53 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
     });
   }
 
+  /// Gets the saved library path from the user's config file.
+  Future<String?> _getRestoredLibraryPath() async {
+    try {
+      final dir = await getApplicationSupportDirectory();
+      final configFile = File('${dir.path}/${widget.nickname}_rosewire_library.json');
+      if (await configFile.exists()) {
+        final config = jsonDecode(await configFile.readAsString());
+        return config["folderPath"] as String?;
+      }
+    } catch (e) {
+      print("Could not read library config: $e");
+    }
+    return null;
+  }
+
   Future<void> _initializeConnection() async {
+    // 1. Load server preferences
     final prefs = await SharedPreferences.getInstance();
     _serverHost = prefs.getString('rosewire_server') ?? 'rosewire.rosevines.network';
+    _buildPanels(); // Update panels with correct server host
 
-    _buildPanels();
+    // 2. Restore library path and PREPARE the service BEFORE connecting
+    final restoredPath = await _getRestoredLibraryPath();
+    if (restoredPath != null && restoredPath.isNotEmpty) {
+      // Set the path in the service so it's ready for upload requests immediately
+      await _sshChatService.setLibraryPath(restoredPath);
+      // Update the UI state and file list
+      final dir = Directory(restoredPath);
+      if (await dir.exists()) {
+        final files = await dir.list().where((f) => f is File).cast<File>().toList();
+         _handleLibraryChanged(restoredPath, files);
+      }
+    }
 
+    // 3. NOW connect to the server. The client is ready to serve files.
     await _sshChatService.connect(
       nickname: widget.nickname,
       keyPath: widget.keyPath,
       host: _serverHost,
     );
 
-    // Trigger initial data fetches now that the connection is live.
+    // 4. Trigger initial data fetches now that the connection is live.
+    // The initial library share will be triggered by the connection status listener.
     _sshChatService.fetchTopFiles();
     _sshChatService.requestStats();
 
-    await _restoreLibraryAndShare();
-
+    // 5. Set up the periodic refresh timer.
     _shareRefreshTimer?.cancel();
     _shareRefreshTimer = Timer.periodic(const Duration(minutes: 10), (_) {
       if (mounted && _connectionStatus == ConnectionStatus.connected) {
@@ -134,25 +164,6 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
     });
   }
 
-  Future<void> _restoreLibraryAndShare() async {
-    try {
-      final dir = await getApplicationSupportDirectory();
-      final configFile = File('${dir.path}/${widget.nickname}_rosewire_library.json');
-      if (await configFile.exists()) {
-        final config = jsonDecode(await configFile.readAsString());
-        final folderPath = config["folderPath"] as String?;
-        if (folderPath != null && folderPath.isNotEmpty) {
-          final files = await Directory(folderPath)
-              .list()
-              .where((f) => f is File)
-              .toList();
-          _handleLibraryChanged(folderPath, files.cast<File>());
-        }
-      }
-    } catch (e) {
-      print("Could not restore library on desktop: $e");
-    }
-  }
 
   void _handleLibraryChanged(String folderPath, List<File> files) {
     setState(() {
@@ -161,11 +172,15 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
     });
 
     _sshChatService.setLibraryPath(folderPath);
-    _shareLibraryToServer();
+    // Share immediately on change, but only if connected.
+    if (_connectionStatus == ConnectionStatus.connected) {
+      _shareLibraryToServer();
+    }
   }
 
   Future<void> _shareLibraryToServer() async {
-    if (_libraryFiles.isEmpty) return;
+    // Do not share if there are no files or if we aren't connected.
+    if (_libraryFiles.isEmpty || _connectionStatus != ConnectionStatus.connected) return;
 
     final filesPayloadFutures = _libraryFiles.map((file) async {
       final name = file.path.split(Platform.pathSeparator).last;
