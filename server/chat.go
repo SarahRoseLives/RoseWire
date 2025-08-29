@@ -483,6 +483,7 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 			FileName:   filename,
 			Size:       fileInfo.Size,
 			FromUser:   peer,
+			Hash:       fileInfo.Hash,
 		})
 
 		fullPeerAddress := peerDomain
@@ -546,6 +547,7 @@ func (c *ChatClient) initiateFileTransfer(filename, peer string) {
 			FileName:   filename,
 			Size:       fileInfo.Size,
 			FromUser:   peer,
+			Hash:       fileInfo.Hash,
 		})
 	}
 }

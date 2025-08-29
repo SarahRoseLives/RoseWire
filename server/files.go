@@ -12,9 +12,10 @@ import (
 
 // SharedFile represents a file a user is sharing.
 type SharedFile struct {
-	Name  string
-	Size  int64
-	IsDir bool
+	Name  string `json:"Name"`
+	Size  int64  `json:"Size"`
+	IsDir bool   `json:"IsDir"`
+	Hash  string `json:"Hash,omitempty"`
 }
 
 // SearchResult includes the peer's nickname along with file info.
@@ -22,6 +23,7 @@ type SearchResult struct {
 	FileName string `json:"fileName"`
 	Size     int64  `json:"size"`
 	Peer     string `json:"peer"`
+	Hash     string `json:"Hash,omitempty"`
 }
 
 // UserFileEntry holds a user's file list and the last time it was updated.
@@ -131,6 +133,7 @@ func (r *FileRegistry) Search(query string, requester string) []SearchResult {
 						FileName: file.Name,
 						Size:     file.Size,
 						Peer:     targetUser,
+						Hash:     file.Hash,
 					})
 				}
 			}
@@ -155,6 +158,7 @@ func (r *FileRegistry) Search(query string, requester string) []SearchResult {
 					FileName: file.Name,
 					Size:     file.Size,
 					Peer:     nickname,
+					Hash:     file.Hash,
 				})
 			}
 		}
@@ -176,6 +180,7 @@ func (r *FileRegistry) TopFiles(limit int) []SearchResult {
 					FileName: file.Name,
 					Size:     file.Size,
 					Peer:     nickname,
+					Hash:     file.Hash,
 				})
 			}
 		}

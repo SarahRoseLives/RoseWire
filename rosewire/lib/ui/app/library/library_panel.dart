@@ -1,8 +1,10 @@
+// CLIENT/ui/app/library/library_panel.dart
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:crypto/crypto.dart';
 import '../../../services/ssh_chat_service.dart';
 
 // Helper function to get an icon based on the file extension.
@@ -152,14 +154,17 @@ class _LibraryPanelMobileState extends State<LibraryPanelMobile> {
           await configFile.writeAsString(jsonEncode(config));
         }
 
-        final filesPayload = files.map((file) {
-          return {
-            "Name": file.path.split('/').last,
-            "Size": file.lengthSync(),
-            "IsDir": false,
-          };
+        final filesPayloadFutures = files.map((file) async {
+           final hash = await sha256.bind(file.openRead()).first;
+           return {
+             "Name": file.path.split(Platform.pathSeparator).last,
+             "Size": await file.length(),
+             "IsDir": false,
+             "Hash": hash.toString(),
+           };
         }).toList();
 
+        final filesPayload = await Future.wait(filesPayloadFutures);
         widget.onLibraryChanged(folderPath, filesPayload);
 
       } else {

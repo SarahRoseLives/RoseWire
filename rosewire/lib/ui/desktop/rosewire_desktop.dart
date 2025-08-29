@@ -6,6 +6,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:crypto/crypto.dart';
 
 import '../../services/ssh_chat_service.dart';
 import '../../theme_manager.dart';
@@ -163,17 +164,22 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
     _shareLibraryToServer();
   }
 
-  void _shareLibraryToServer() {
+  Future<void> _shareLibraryToServer() async {
     if (_libraryFiles.isEmpty) return;
-    final filesPayload = _libraryFiles.map((file) {
+
+    final filesPayloadFutures = _libraryFiles.map((file) async {
       final name = file.path.split(Platform.pathSeparator).last;
-      final size = file.lengthSync();
+      final size = await file.length();
+      final hash = await sha256.bind(file.openRead()).first;
       return {
         "Name": name,
         "Size": size,
         "IsDir": false,
+        "Hash": hash.toString(),
       };
     }).toList();
+
+    final filesPayload = await Future.wait(filesPayloadFutures);
     _sshChatService.shareFiles(filesPayload);
     print("Shared ${filesPayload.length} files with the network.");
   }

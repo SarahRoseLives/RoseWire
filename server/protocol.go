@@ -1,3 +1,4 @@
+// SERVER/protocol.go
 package main
 
 import "encoding/json"
@@ -73,6 +74,7 @@ type TransferStartPayload struct {
 	FileName   string `json:"fileName"`
 	Size       int64  `json:"size"`
 	FromUser   string `json:"fromUser"`
+	Hash       string `json:"Hash,omitempty"` // The SHA256 hash of the file
 }
 
 type UploadRequestPayload struct {
