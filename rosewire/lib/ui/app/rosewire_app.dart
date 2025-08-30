@@ -1,4 +1,3 @@
-// CLIENT/ui/app/rosewire_app.dart
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -135,16 +134,20 @@ class _RoseWireAppMobileState extends State<RoseWireAppMobile> {
         }
     }
 
-    await _chatService.setLibraryPath(loadedPath);
-    setState(() {
-      _libraryPath = loadedPath;
-    });
-
+    // Connect to the service FIRST to initialize the SshFileService.
     await _chatService.connect(
       nickname: nickname,
       keyPath: keyPath,
       host: _serverHost,
     );
+
+    // NOW that the service is connected, set the library path.
+    if (loadedPath.isNotEmpty) {
+      await _chatService.setLibraryPath(loadedPath);
+      setState(() {
+        _libraryPath = loadedPath;
+      });
+    }
 
     await _reshareLibraryFiles();
 

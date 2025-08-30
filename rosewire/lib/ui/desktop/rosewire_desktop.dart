@@ -129,28 +129,27 @@ class _RoseWireDesktopState extends State<RoseWireDesktop> {
     _serverHost = prefs.getString('rosewire_server') ?? 'rosewire.rosevines.network';
     _buildPanels(); // Update panels with correct server host
 
-    // 2. Restore library path and PREPARE the service BEFORE connecting
-    final restoredPath = await _getRestoredLibraryPath();
-    if (restoredPath != null && restoredPath.isNotEmpty) {
-      // Set the path in the service so it's ready for upload requests immediately
-      await _sshChatService.setLibraryPath(restoredPath);
-      // Update the UI state and file list
-      final dir = Directory(restoredPath);
-      if (await dir.exists()) {
-        final files = await dir.list().where((f) => f is File).cast<File>().toList();
-         _handleLibraryChanged(restoredPath, files);
-      }
-    }
-
-    // 3. NOW connect to the server. The client is ready to serve files.
+    // 2. Connect to the server FIRST. This creates the internal file service.
     await _sshChatService.connect(
       nickname: widget.nickname,
       keyPath: widget.keyPath,
       host: _serverHost,
     );
 
+    // 3. NOW that the service is connected, restore the library path and set it.
+    final restoredPath = await _getRestoredLibraryPath();
+    if (restoredPath != null && restoredPath.isNotEmpty) {
+      final dir = Directory(restoredPath);
+      if (await dir.exists()) {
+        final files =
+            await dir.list().where((f) => f is File).cast<File>().toList();
+        // This single call will update the service's path and the UI state.
+        _handleLibraryChanged(restoredPath, files);
+      }
+    }
+
     // 4. Trigger initial data fetches now that the connection is live.
-    // The initial library share will be triggered by the connection status listener.
+    // The initial library share is triggered by the connection status listener.
     _sshChatService.fetchTopFiles();
     _sshChatService.requestStats();
 
