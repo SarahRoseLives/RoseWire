@@ -23,7 +23,7 @@ type S2SHandler struct {
 	Hub         *ChatHub
 	DataManager *DataStreamManager
 	S2SClient   *S2SClient
-	AdminConfig *AdminConfig // Added admin config
+	AdminConfig *AdminConfig
 }
 
 func NewS2SHandler(cfg *Config, hub *ChatHub, dataManager *DataStreamManager, s2sClient *S2SClient, adminCfg *AdminConfig) *S2SHandler {
@@ -32,7 +32,7 @@ func NewS2SHandler(cfg *Config, hub *ChatHub, dataManager *DataStreamManager, s2
 		Hub:         hub,
 		DataManager: dataManager,
 		S2SClient:   s2sClient,
-		AdminConfig: adminCfg, // Initialize admin config
+		AdminConfig: adminCfg,
 	}
 }
 
@@ -61,7 +61,6 @@ func (h *S2SHandler) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// For streaming data, we only check the identity header for now.
 		if strings.HasPrefix(r.URL.Path, "/api/s2s/data/") {
 			if identity == "" {
 				http.Error(w, "Unauthorized: Missing identity header", http.StatusUnauthorized)
@@ -94,18 +93,7 @@ func (h *S2SHandler) authMiddleware(next http.Handler) http.Handler {
 		}
 		r.Body = io.NopCloser(bytes.NewBuffer(body))
 
-		var peerAddress string
-		for _, p := range h.Cfg.Peers {
-			if strings.HasPrefix(p, identity) {
-				peerAddress = p
-				break
-			}
-		}
-		if peerAddress == "" {
-			log.Printf("S2S unauthorized: Could not find peer address for identity '%s'", identity)
-			http.Error(w, "Unauthorized: Unknown peer", http.StatusUnauthorized)
-			return
-		}
+		peerAddress := identity + ":8080"
 
 		publicKey, err := h.S2SClient.getPeerPublicKey(peerAddress)
 		if err != nil {
@@ -119,6 +107,24 @@ func (h *S2SHandler) authMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "Unauthorized: Invalid signature", http.StatusUnauthorized)
 			return
 		}
+
+		// --- START OF OPPORTUNISTIC FEDERATION LOGIC ---
+		// If the signature is valid, the peer is legitimate. Add them to our
+		// peer list if we haven't seen them before.
+		h.Hub.mu.Lock()
+		found := false
+		for _, p := range h.Hub.config.Peers {
+			if p == peerAddress {
+				found = true
+				break
+			}
+		}
+		if !found {
+			h.Hub.config.Peers = append(h.Hub.config.Peers, peerAddress)
+			log.Printf("Opportunistic Federation: Discovered and added new trusted peer: %s", peerAddress)
+		}
+		h.Hub.mu.Unlock()
+		// --- END OF OPPORTUNISTIC FEDERATION LOGIC ---
 
 		next.ServeHTTP(w, r)
 	})
@@ -157,6 +163,27 @@ func (h *S2SHandler) InitiateTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad request: could not decode transfer request", http.StatusBadRequest)
 		return
 	}
+
+	// --- START OF NEW LOGIC ---
+	// The server initiating the transfer is a trusted peer. Add them
+	// to our peer list if they are not already present. This ensures we know
+	// their full address for relaying data streams back.
+	identity := r.Header.Get("X-RoseWire-Identity")
+	peerAddress := identity + ":8080"
+	h.Hub.mu.Lock()
+	found := false
+	for _, p := range h.Hub.config.Peers {
+		if p == peerAddress {
+			found = true
+			break
+		}
+	}
+	if !found {
+		h.Hub.config.Peers = append(h.Hub.config.Peers, peerAddress)
+		log.Printf("Opportunistic Federation (Transfer): Discovered and added new trusted peer: %s", peerAddress)
+	}
+	h.Hub.mu.Unlock()
+	// --- END OF NEW LOGIC ---
 
 	log.Printf("S2S Transfer: Received request for %s from %s. Will forward to %s", req.FileName, req.RequesterPeer, req.RequesterPeerDomain)
 

@@ -35,6 +35,7 @@ const (
 	defaultSshListenAddr  = "0.0.0.0:2222"
 	defaultHttpListenAddr = "0.0.0.0:8080"
 	serverVersion         = "1.0.3"
+	gossipFanout          = 3 // The number of peers to gossip with in each cycle
 )
 
 type DataStreamManager struct {
@@ -236,42 +237,66 @@ func gossip(hub *ChatHub) {
 		log.Println("Gossip: No non-blocked peers to gossip with.")
 		return
 	}
+	hub.mu.Unlock() // Unlock early as we don't need the hub lock for S2S calls
 
-	targetPeer := allowedPeers[mrand.Intn(len(allowedPeers))]
-	hub.mu.Unlock()
+	// --- START OF IMPROVED GOSSIP LOGIC ---
 
-	log.Printf("Gossip: Gossiping with peer %s", targetPeer)
-	discoveredPeers, err := hub.s2sClient.FetchPeers(targetPeer)
-	if err != nil {
-		log.Printf("Gossip: Failed to fetch peers from %s: %v", targetPeer, err)
-		return
+	// 1. Shuffle the list of peers to ensure we talk to different ones each time.
+	mrand.Shuffle(len(allowedPeers), func(i, j int) {
+		allowedPeers[i], allowedPeers[j] = allowedPeers[j], allowedPeers[i]
+	})
+
+	// 2. Determine how many peers to contact in this cycle.
+	numToContact := gossipFanout
+	if len(allowedPeers) < gossipFanout {
+		numToContact = len(allowedPeers)
 	}
 
-	hub.mu.Lock()
-	defer hub.mu.Unlock()
-	hub.adminConfig.mu.RLock()
-	defer hub.adminConfig.mu.RUnlock()
+	// 3. Contact the first few peers from the shuffled list.
+	for i := 0; i < numToContact; i++ {
+		targetPeer := allowedPeers[i]
 
-	listenAddrParts := strings.Split(hub.config.HttpListenAddr, ":")
-	listenPort := "8080"
-	if len(listenAddrParts) > 1 {
-		listenPort = listenAddrParts[len(listenAddrParts)-1]
-	}
-	selfAddress := fmt.Sprintf("%s:%s", hub.config.Domain, listenPort)
+		// Use a goroutine so we can contact multiple peers in parallel.
+		go func(peerAddress string) {
+			log.Printf("Gossip: Gossiping with peer %s", peerAddress)
+			discoveredPeers, err := hub.s2sClient.FetchPeers(peerAddress)
+			if err != nil {
+				log.Printf("Gossip: Failed to fetch peers from %s: %v", peerAddress, err)
+				return
+			}
 
-	existingPeers := make(map[string]bool)
-	for _, p := range hub.config.Peers {
-		existingPeers[p] = true
-	}
+			hub.mu.Lock()
+			defer hub.mu.Unlock()
+			hub.adminConfig.mu.RLock()
+			defer hub.adminConfig.mu.RUnlock()
 
-	for _, discoveredPeer := range discoveredPeers {
-		discoveredDomain := strings.Split(discoveredPeer, ":")[0]
-		if discoveredPeer != selfAddress && !existingPeers[discoveredPeer] && !blockedMap[discoveredDomain] {
-			log.Printf("Gossip: Discovered new peer: %s", discoveredPeer)
-			hub.config.Peers = append(hub.config.Peers, discoveredPeer)
-			existingPeers[discoveredPeer] = true
-		}
+			listenAddrParts := strings.Split(hub.config.HttpListenAddr, ":")
+			listenPort := "8080"
+			if len(listenAddrParts) > 1 {
+				listenPort = listenAddrParts[len(listenAddrParts)-1]
+			}
+			selfAddress := fmt.Sprintf("%s:%s", hub.config.Domain, listenPort)
+
+			existingPeers := make(map[string]bool)
+			for _, p := range hub.config.Peers {
+				existingPeers[p] = true
+			}
+
+			newlyAdded := 0
+			for _, discoveredPeer := range discoveredPeers {
+				discoveredDomain := strings.Split(discoveredPeer, ":")[0]
+				if discoveredPeer != selfAddress && !existingPeers[discoveredPeer] && !blockedMap[discoveredDomain] {
+					hub.config.Peers = append(hub.config.Peers, discoveredPeer)
+					existingPeers[discoveredPeer] = true
+					newlyAdded++
+				}
+			}
+			if newlyAdded > 0 {
+				log.Printf("Gossip: Discovered and added %d new peer(s) from %s", newlyAdded, peerAddress)
+			}
+		}(targetPeer)
 	}
+	// --- END OF IMPROVED GOSSIP LOGIC ---
 }
 
 func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *ChatHub, dataManager *DataStreamManager, instanceSigner crypto.Signer, adminCfg *AdminConfig, store *sessions.CookieStore) {
@@ -327,7 +352,7 @@ func startHttpServer(listenAddr string, cfg *Config, nickDB *NickDB, chatHub *Ch
 	s2sRouter.HandleFunc("/peers", s2sHandler.Peers).Methods("GET")
 
 	// Start the server using the certificate files specified in the config
-	log.Printf("HTTPS services listening at https://%s%s/", cfg.Domain, listenAddr)
+	log.Printf("HTTPS services listening at https://%s %s/", cfg.Domain, listenAddr)
 	if err := http.ListenAndServeTLS(listenAddr, cfg.CertFile, cfg.KeyFile, router); err != nil {
 		log.Fatalf("Failed to start HTTPS server: %v", err)
 	}
