@@ -316,8 +316,26 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 				finalResults = append(finalResults, results...)
 			}
 
-			log.Printf("Total federated search results for '%s': %d", p.Query, len(finalResults))
-			c.send("search_results", SearchResultsPayload{Results: finalResults})
+			// --- START FIX: Deduplicate results from local cache and federated queries ---
+			uniqueResults := make(map[string]bool)
+			deduplicatedList := []SearchResult{}
+			for _, result := range finalResults {
+				// A unique file is identified by its content hash and the peer who owns it.
+				// Fallback to filename if hash is missing for some reason.
+				uniqueKey := result.Peer + ":" + result.Hash
+				if result.Hash == "" {
+					uniqueKey = result.Peer + ":" + result.FileName
+				}
+
+				if _, exists := uniqueResults[uniqueKey]; !exists {
+					uniqueResults[uniqueKey] = true
+					deduplicatedList = append(deduplicatedList, result)
+				}
+			}
+			// --- END FIX ---
+
+			log.Printf("Total federated search results for '%s': %d (deduplicated from %d)", p.Query, len(deduplicatedList), len(finalResults))
+			c.send("search_results", SearchResultsPayload{Results: deduplicatedList})
 		}
 
 	case "top_files":
