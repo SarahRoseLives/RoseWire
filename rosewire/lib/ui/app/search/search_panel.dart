@@ -1,8 +1,9 @@
+// CLIENT/ui/app/search/search_panel.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
 import '../../../models/search_result.dart';
-import '../../../theme_manager.dart'; // Corrected import
+import '../../../theme_manager.dart';
 
 // Helper function to get an icon based on the file extension.
 IconData _getIconForFile(String fileName) {
@@ -145,6 +146,28 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
     );
   }
 
+  // --- NEW: Method to show peer search options ---
+  void _showPeerSearchOptions(BuildContext context, SearchResult item) {
+    showModalBottomSheet(
+      context: context,
+      builder: (BuildContext bc) {
+        return Wrap(
+          children: <Widget>[
+            ListTile(
+              leading: const Icon(Icons.person_search),
+              title: Text('View all files from ${item.peer}'),
+              onTap: () {
+                Navigator.of(context).pop(); // Close the bottom sheet
+                _searchController.text = item.peer;
+                _performSearch();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -168,7 +191,7 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: "Search for files...",
+                hintText: "Search for files or users (@user@domain)...",
                 hintStyle: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.5)),
                 filled: true,
                 fillColor: theme.colorScheme.surface,
@@ -241,6 +264,10 @@ class _SearchPanelMobileState extends State<SearchPanelMobile> {
               onPressed: () => _downloadFile(item),
               tooltip: "Download File",
             ),
+            // --- NEW: Added long press gesture ---
+            onLongPress: () {
+              _showPeerSearchOptions(context, item);
+            },
           ),
         );
       },

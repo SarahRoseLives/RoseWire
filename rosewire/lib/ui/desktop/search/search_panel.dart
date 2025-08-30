@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/ssh_chat_service.dart';
 import '../../../models/search_result.dart';
-import '../../../theme_manager.dart'; // Corrected import
+import '../../../theme_manager.dart';
 
 // Helper function to get an icon based on the file extension.
 IconData _getIconForFile(String fileName) {
@@ -158,31 +158,54 @@ class _SearchPanelState extends State<SearchPanel> {
       itemCount: _results.length,
       itemBuilder: (context, idx) {
         final item = _results[idx];
-        return Card(
-          elevation: 4,
-          margin: const EdgeInsets.symmetric(vertical: 8),
-          color: theme.colorScheme.surface.withOpacity(0.5),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: BorderSide(
-              color: theme.colorScheme.primary.withOpacity(0.2),
-              width: 1.2,
+        // --- NEW: Wrap Card in GestureDetector for right-click context menu ---
+        return GestureDetector(
+          onSecondaryTapUp: (details) {
+            showMenu(
+              context: context,
+              position: RelativeRect.fromLTRB(
+                details.globalPosition.dx,
+                details.globalPosition.dy,
+                details.globalPosition.dx,
+                details.globalPosition.dy,
+              ),
+              items: [
+                PopupMenuItem(
+                  child: Text('View all files from ${item.peer}'),
+                  onTap: () {
+                    _searchController.text = item.peer;
+                    _performSearch();
+                  },
+                ),
+              ],
+            );
+          },
+          child: Card(
+            elevation: 4,
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            color: theme.colorScheme.surface.withOpacity(0.5),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(
+                color: theme.colorScheme.primary.withOpacity(0.2),
+                width: 1.2,
+              ),
             ),
-          ),
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: theme.colorScheme.primary,
-              child: Icon(_getIconForFile(item.fileName), color: theme.colorScheme.onPrimary),
-            ),
-            title: Text(item.fileName, style: TextStyle(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold, fontSize: 16)),
-            subtitle: Text(
-              "Size: ${item.formattedSize} • From: ${item.peer}",
-              style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.7)),
-            ),
-            trailing: IconButton(
-              icon: const Icon(Icons.download_for_offline, color: statusGreen),
-              onPressed: () => _downloadFile(item),
-              tooltip: "Download File",
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: theme.colorScheme.primary,
+                child: Icon(_getIconForFile(item.fileName), color: theme.colorScheme.onPrimary),
+              ),
+              title: Text(item.fileName, style: TextStyle(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold, fontSize: 16)),
+              subtitle: Text(
+                "Size: ${item.formattedSize} • From: ${item.peer}",
+                style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.7)),
+              ),
+              trailing: IconButton(
+                icon: const Icon(Icons.download_for_offline, color: statusGreen),
+                onPressed: () => _downloadFile(item),
+                tooltip: "Download File",
+              ),
             ),
           ),
         );
@@ -213,7 +236,7 @@ class _SearchPanelState extends State<SearchPanel> {
                 child: TextField(
                   controller: _searchController,
                   decoration: InputDecoration(
-                    hintText: "Type your search...",
+                    hintText: "Type your search for files or users (@user@domain)...",
                     hintStyle: TextStyle(
                       color: theme.colorScheme.onSurface.withOpacity(0.4),
                       fontSize: 15,
