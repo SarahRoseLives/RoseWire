@@ -110,39 +110,13 @@ func (r *FileRegistry) VerifyFileOwner(filename, owner string) bool {
 }
 
 // Search finds files matching the query across all online users.
-// It excludes files owned by the requester.
-// If the query is a federated username, it returns all files for that user.
+// It excludes files owned by the requester and now handles direct user searches.
 func (r *FileRegistry) Search(query string, requester string) []SearchResult {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	var results []SearchResult
-	trimmedQuery := strings.TrimSpace(query)
-
-	if strings.HasPrefix(trimmedQuery, "@") && strings.Count(trimmedQuery, "@") == 2 {
-		targetUser := trimmedQuery
-		if targetUser == requester {
-			return results // Don't return results if a user searches for themselves.
-		}
-
-		entry, ok := r.files[targetUser]
-		if ok {
-			for _, file := range entry.Files {
-				if !file.IsDir {
-					results = append(results, SearchResult{
-						FileName: file.Name,
-						Size:     file.Size,
-						Peer:     targetUser,
-						Hash:     file.Hash,
-					})
-				}
-			}
-		}
-		log.Printf("Direct user search for '%s' returned %d local results.", query, len(results))
-		return results
-	}
-
-	lowerQuery := strings.ToLower(trimmedQuery)
+	lowerQuery := strings.ToLower(strings.TrimSpace(query))
 	if lowerQuery == "" {
 		return results
 	}
@@ -152,8 +126,13 @@ func (r *FileRegistry) Search(query string, requester string) []SearchResult {
 			continue
 		}
 
+		// Check if the user's name itself is a match for the query.
+		// This makes searching for "@user@domain.com" list all of their files.
+		isDirectUserMatch := strings.ToLower(nickname) == lowerQuery
+
 		for _, file := range entry.Files {
-			if !file.IsDir && strings.Contains(strings.ToLower(file.Name), lowerQuery) {
+			// Now, the condition checks for a filename match OR a direct user match.
+			if !file.IsDir && (isDirectUserMatch || strings.Contains(strings.ToLower(file.Name), lowerQuery)) {
 				results = append(results, SearchResult{
 					FileName: file.Name,
 					Size:     file.Size,
@@ -163,7 +142,7 @@ func (r *FileRegistry) Search(query string, requester string) []SearchResult {
 			}
 		}
 	}
-	log.Printf("Keyword search for '%s' by '%s' returned %d results.", query, requester, len(results))
+	log.Printf("Unified search for '%s' by '%s' returned %d results.", query, requester, len(results))
 	return results
 }
 
