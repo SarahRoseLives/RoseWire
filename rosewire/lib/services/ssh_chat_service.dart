@@ -29,6 +29,7 @@ class SshChatService {
   String? _lastNickname;
   String? _lastKeyPath;
   String? _lastHost;
+  String? _libraryPath; // <-- FIX: Added to persist across reconnections
 
   SshFileService? _fileService;
 
@@ -51,8 +52,12 @@ class SshChatService {
 
   SshChatService({int port = 2222}) : _port = port;
 
-  Future<void> setLibraryPath(String path) async =>
-      await _fileService?.setLibraryPath(path);
+  // FIX: Modified to store path locally in the service
+  Future<void> setLibraryPath(String path) async {
+    _libraryPath = path;
+    await _fileService?.setLibraryPath(path);
+  }
+
   void shareFiles(List<Map<String, dynamic>> files) =>
       _fileService?.shareFiles(files);
   void searchFiles(String query) => _fileService?.searchFiles(query);
@@ -205,6 +210,11 @@ class SshChatService {
         onSearchResults: _searchResultController.add,
         onTransfersUpdate: _transferController.add,
       );
+
+      // FIX: Re-apply the library path on every new connection
+      if (_libraryPath != null) {
+        await _fileService!.setLibraryPath(_libraryPath!);
+      }
 
       _chatSession = await _client!.execute('subsystem:chat');
 
