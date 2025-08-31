@@ -148,12 +148,32 @@ class _TransfersPanelMobileState extends State<TransfersPanelMobile> {
                               ],
                             ),
                           ),
-                        if (item.status == TransferStatus.failed && item.error.isNotEmpty)
+                        if (item.status == TransferStatus.failed)
                           Padding(
                             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                            child: Text(
-                              "Error: ${item.error}",
-                              style: TextStyle(color: statusRed.withOpacity(0.9), fontSize: 12),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    "Error: ${item.error.isNotEmpty ? item.error : 'Transfer failed'}",
+                                    style: TextStyle(color: statusRed.withOpacity(0.9), fontSize: 12),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                TextButton.icon(
+                                  icon: const Icon(Icons.refresh, size: 18),
+                                  label: const Text("Retry"),
+                                  onPressed: () {
+                                    widget.chatService.downloadFile(item.fileName, item.size, item.fromUser);
+                                  },
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: theme.colorScheme.primary,
+                                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                       ],

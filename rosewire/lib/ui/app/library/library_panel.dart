@@ -1,10 +1,12 @@
 // CLIENT/ui/app/library/library_panel.dart
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:crypto/crypto.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../services/ssh_chat_service.dart';
 
 // Helper function to get an icon based on the file extension.
@@ -100,6 +102,7 @@ class _LibraryPanelMobileState extends State<LibraryPanelMobile> {
   bool _loading = false;
   String? _error;
   String? _libraryPath;
+  Timer? _refreshTimer;
 
   String get _configFilename => "${widget.nickname}_rosewire_library.json";
 
@@ -110,6 +113,19 @@ class _LibraryPanelMobileState extends State<LibraryPanelMobile> {
     if (widget.initialPath != null) {
       _loadFilesFromFolder(widget.initialPath!, persist: false);
     }
+
+    // Set up a timer to periodically refresh the file list.
+    _refreshTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+      if (_libraryPath != null && mounted) {
+        _loadFilesFromFolder(_libraryPath!, persist: false, isBackgroundRefresh: true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<File> _getLibraryConfigFile() async {
@@ -127,8 +143,22 @@ class _LibraryPanelMobileState extends State<LibraryPanelMobile> {
     }
   }
 
-  Future<void> _loadFilesFromFolder(String folderPath, {bool persist = true}) async {
-    if (mounted) {
+  Future<void> _openFolder() async {
+    if (_libraryPath == null) return;
+    final uri = Uri.directory(_libraryPath!);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open folder: $_libraryPath')),
+        );
+      }
+    }
+  }
+
+  Future<void> _loadFilesFromFolder(String folderPath, {bool persist = true, bool isBackgroundRefresh = false}) async {
+    if (mounted && !isBackgroundRefresh) {
       setState(() {
         _libraryPath = folderPath;
         _loading = true;
@@ -141,10 +171,20 @@ class _LibraryPanelMobileState extends State<LibraryPanelMobile> {
       if (await dir.exists()) {
         final files = await dir.list().where((f) => f is File).cast<File>().toList();
 
+        final currentFilePaths = _files.map((f) => f.path).toSet();
+        final newFilePaths = files.map((f) => f.path).toSet();
+
+        if (currentFilePaths.length == newFilePaths.length && currentFilePaths.containsAll(newFilePaths)) {
+          if (!isBackgroundRefresh && mounted) {
+            setState(() => _loading = false);
+          }
+          return; // No changes detected
+        }
+
         if (mounted) {
           setState(() {
             _files = files;
-            _loading = false;
+            if (!isBackgroundRefresh) _loading = false;
           });
         }
 
@@ -155,13 +195,13 @@ class _LibraryPanelMobileState extends State<LibraryPanelMobile> {
         }
 
         final filesPayloadFutures = files.map((file) async {
-           final hash = await sha256.bind(file.openRead()).first;
-           return {
-             "Name": file.path.split(Platform.pathSeparator).last,
-             "Size": await file.length(),
-             "IsDir": false,
-             "Hash": hash.toString(),
-           };
+          final hash = await sha256.bind(file.openRead()).first;
+          return {
+            "Name": file.path.split(Platform.pathSeparator).last,
+            "Size": await file.length(),
+            "IsDir": false,
+            "Hash": hash.toString(),
+          };
         }).toList();
 
         final filesPayload = await Future.wait(filesPayloadFutures);
@@ -171,7 +211,7 @@ class _LibraryPanelMobileState extends State<LibraryPanelMobile> {
         if (mounted) {
           setState(() {
             _error = "Selected directory does not exist.";
-            _loading = false;
+            if (!isBackgroundRefresh) _loading = false;
           });
         }
       }
@@ -179,7 +219,7 @@ class _LibraryPanelMobileState extends State<LibraryPanelMobile> {
       if (mounted) {
         setState(() {
           _error = "Failed to load files. Please check permissions.";
-          _loading = false;
+          if (!isBackgroundRefresh) _loading = false;
         });
       }
       print("Error loading files: $e");
@@ -200,12 +240,13 @@ class _LibraryPanelMobileState extends State<LibraryPanelMobile> {
   }
 
   Widget _buildHeader() {
+    final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
+          const Text(
             "My Shared Library",
             style: TextStyle(
               fontSize: 20,
@@ -220,19 +261,36 @@ class _LibraryPanelMobileState extends State<LibraryPanelMobile> {
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              icon: const Icon(Icons.folder_open),
-              label: const Text("Select Library Folder"),
-              onPressed: _selectFolder,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.pinkAccent,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.folder_open),
+                  label: const Text("Select Folder"),
+                  onPressed: _selectFolder,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.pinkAccent,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
               ),
-            ),
+              if (_libraryPath != null) ...[
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.launch),
+                  onPressed: _openFolder,
+                  tooltip: 'Open Library Folder',
+                  style: IconButton.styleFrom(
+                    backgroundColor: theme.colorScheme.surface,
+                    foregroundColor: theme.colorScheme.onSurface,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.all(12),
+                  ),
+                )
+              ]
+            ],
           ),
         ],
       ),

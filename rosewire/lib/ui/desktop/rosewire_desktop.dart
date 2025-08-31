@@ -479,7 +479,7 @@ class _RoseWireStatusBar extends StatelessWidget {
           ),
           const Spacer(),
           Text(
-            "RoseWire 2.0 - Modern Edition",
+            "RoseWire v${SshChatService.clientVersion} - Modern Edition",
             style: TextStyle(
               color: theme.colorScheme.onSurface.withOpacity(0.8),
               fontSize: 13,

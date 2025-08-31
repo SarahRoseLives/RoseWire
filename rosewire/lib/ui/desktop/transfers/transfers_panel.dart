@@ -116,52 +116,62 @@ class _TransfersPanelState extends State<TransfersPanel> {
                         child: Padding(
                           padding: const EdgeInsets.symmetric(vertical: 8.0),
                           child: ListTile(
-                            leading: Icon(_statusIcon(item.status), color: color, size: 32),
-                            title: Text(item.fileName, style: TextStyle(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold)),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const SizedBox(height: 4),
-                                Text(
-                                  "${_statusText(item.status)} from ${item.fromUser}",
-                                  style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.7)),
-                                ),
-                                if (item.status == TransferStatus.failed && item.error.isNotEmpty)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 4.0),
-                                    child: Text(
-                                      item.error,
-                                      style: TextStyle(color: statusRed.withOpacity(0.9), fontSize: 12),
-                                    ),
+                              leading: Icon(_statusIcon(item.status), color: color, size: 32),
+                              title: Text(item.fileName, style: TextStyle(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold)),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    "${_statusText(item.status)} from ${item.fromUser}",
+                                    style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.7)),
                                   ),
-                              ],
-                            ),
-                            trailing: (item.status == TransferStatus.active || item.status == TransferStatus.complete)
-                                ? SizedBox(
-                                    width: 120,
-                                    child: Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      crossAxisAlignment: CrossAxisAlignment.end,
-                                      children: [
-                                        Text(
-                                          item.status == TransferStatus.active && item.speed.isNotEmpty
-                                              ? item.speed
-                                              : "${(item.progress * 100).toStringAsFixed(0)}%",
-                                          style: TextStyle(color: color, fontWeight: FontWeight.bold),
-                                        ),
-                                        const SizedBox(height: 6),
-                                        LinearProgressIndicator(
-                                          value: item.progress,
-                                          color: color,
-                                          backgroundColor: color.withOpacity(0.2),
-                                          minHeight: 6,
-                                          borderRadius: BorderRadius.circular(6),
-                                        ),
-                                      ],
+                                  if (item.status == TransferStatus.failed && item.error.isNotEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 4.0),
+                                      child: Text(
+                                        item.error,
+                                        style: TextStyle(color: statusRed.withOpacity(0.9), fontSize: 12),
+                                      ),
                                     ),
-                                  )
-                                : null,
-                          ),
+                                ],
+                              ),
+                              trailing: (item.status == TransferStatus.active || item.status == TransferStatus.complete)
+                                  ? SizedBox(
+                                      width: 120,
+                                      child: Column(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        crossAxisAlignment: CrossAxisAlignment.end,
+                                        children: [
+                                          Text(
+                                            item.status == TransferStatus.active && item.speed.isNotEmpty
+                                                ? item.speed
+                                                : "${(item.progress * 100).toStringAsFixed(0)}%",
+                                            style: TextStyle(color: color, fontWeight: FontWeight.bold),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          LinearProgressIndicator(
+                                            value: item.progress,
+                                            color: color,
+                                            backgroundColor: color.withOpacity(0.2),
+                                            minHeight: 6,
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                  : item.status == TransferStatus.failed
+                                      ? TextButton.icon(
+                                          icon: const Icon(Icons.refresh),
+                                          label: const Text("Retry"),
+                                          onPressed: () {
+                                            widget.chatService.downloadFile(item.fileName, item.size, item.fromUser);
+                                          },
+                                          style: TextButton.styleFrom(
+                                            foregroundColor: theme.colorScheme.primary,
+                                          ),
+                                        )
+                                      : null),
                         ),
                       );
                     },

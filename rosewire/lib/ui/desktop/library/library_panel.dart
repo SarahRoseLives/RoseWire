@@ -1,10 +1,12 @@
 // CLIENT/ui/desktop/library/library_panel.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../theme_manager.dart'; // Corrected import
 
 // Helper function to get an icon based on the file extension.
@@ -98,6 +100,7 @@ class _LibraryPanelState extends State<LibraryPanel> {
   String? _downloadsPath;
   bool _initialized = false;
   final ScrollController _scrollController = ScrollController();
+  Timer? _refreshTimer;
 
   final String _configFilename = "rosewire_library.json";
 
@@ -105,10 +108,16 @@ class _LibraryPanelState extends State<LibraryPanel> {
   void initState() {
     super.initState();
     _restoreLibrary();
+    _refreshTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+      if (_downloadsPath != null && mounted) {
+        _loadFilesFromFolder(_downloadsPath!, persist: false, isBackgroundRefresh: true);
+      }
+    });
   }
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     _scrollController.dispose();
     super.dispose();
   }
@@ -139,6 +148,18 @@ class _LibraryPanelState extends State<LibraryPanel> {
     setState(() {
       _initialized = true;
     });
+  }
+
+  Future<void> _openFolder() async {
+    if (_downloadsPath == null) return;
+    final uri = Uri.directory(_downloadsPath!);
+    if (!await launchUrl(uri)) {
+      if (mounted) {
+        setState(() {
+          _error = 'Could not open folder: $_downloadsPath';
+        });
+      }
+    }
   }
 
   Future<void> _selectFolder() async {
@@ -194,7 +215,16 @@ class _LibraryPanelState extends State<LibraryPanel> {
     }
   }
 
-  Future<void> _loadFilesFromFolder(String folderPath, {bool persist = true}) async {
+  Future<void> _loadFilesFromFolder(String folderPath, {bool persist = true, bool isBackgroundRefresh = false}) async {
+    if (!isBackgroundRefresh) {
+      if (mounted) {
+        setState(() {
+          _loading = true;
+          _error = null;
+        });
+      }
+    }
+
     try {
       final dir = Directory(folderPath);
       if (await dir.exists()) {
@@ -203,10 +233,21 @@ class _LibraryPanelState extends State<LibraryPanel> {
             .where((f) => f is File)
             .toList();
 
+        final currentFilePaths = _files.map((f) => f.path).toSet();
+        final newFilePaths = files.map((f) => f.path).toSet();
+
+        if (currentFilePaths.length == newFilePaths.length && currentFilePaths.containsAll(newFilePaths)) {
+          if (!isBackgroundRefresh && mounted) {
+            setState(() => _loading = false);
+          }
+          return; // No changes detected
+        }
+
+
         if (mounted) {
           setState(() {
             _files = files;
-            _loading = false;
+            if (!isBackgroundRefresh) _loading = false;
           });
         }
 
@@ -227,8 +268,8 @@ class _LibraryPanelState extends State<LibraryPanel> {
         if (mounted) {
           setState(() {
             _files = [];
-            _loading = false;
             _error = "Selected directory does not exist.";
+            if (!isBackgroundRefresh) _loading = false;
           });
         }
       }
@@ -236,8 +277,8 @@ class _LibraryPanelState extends State<LibraryPanel> {
       if (mounted) {
         setState(() {
           _files = [];
-          _loading = false;
           _error = "Failed to load files: $e";
+          if (!isBackgroundRefresh) _loading = false;
         });
       }
     }
@@ -264,22 +305,33 @@ class _LibraryPanelState extends State<LibraryPanel> {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              SizedBox(width: 16),
+              const Spacer(),
+              if (_downloadsPath != null)
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.launch),
+                  label: const Text("Open"),
+                  onPressed: _openFolder,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              const SizedBox(width: 12),
               ElevatedButton.icon(
-                icon: Icon(Icons.folder_open),
-                label: Text("Select Folder"),
+                icon: const Icon(Icons.folder_open),
+                label: const Text("Select Folder"),
                 onPressed: _selectFolder,
                 style: ElevatedButton.styleFrom(
-                  padding: EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
               ),
             ],
           ),
-          SizedBox(height: 18),
+          const SizedBox(height: 18),
           Expanded(
             child: _downloadsPath == null && !_initialized
-                ? Center(child: CircularProgressIndicator())
+                ? const Center(child: CircularProgressIndicator())
                 : _downloadsPath == null
                     ? Center(
                         child: Text(
@@ -288,7 +340,7 @@ class _LibraryPanelState extends State<LibraryPanel> {
                         ),
                       )
                     : _loading
-                        ? Center(child: CircularProgressIndicator())
+                        ? const Center(child: CircularProgressIndicator())
                         : (_error != null)
                             ? Center(
                                 child: Text(
@@ -316,7 +368,7 @@ class _LibraryPanelState extends State<LibraryPanel> {
                                         final size = file.lengthSync();
                                         return Card(
                                           elevation: 2,
-                                          margin: EdgeInsets.symmetric(vertical: 8),
+                                          margin: const EdgeInsets.symmetric(vertical: 8),
                                           color: theme.colorScheme.surface.withOpacity(0.5),
                                           shape: RoundedRectangleBorder(
                                             borderRadius: BorderRadius.circular(16),
