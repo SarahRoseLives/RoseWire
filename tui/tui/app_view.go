@@ -4,9 +4,11 @@ package tui
 import (
 	"fmt"
 	"log"
+	"math"
 	"rosetui/profile"
 	"rosetui/ssh"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -30,6 +32,9 @@ var panelNames = map[activePanel]string{
 	panelNetwork:   "Network",
 }
 
+// **NEW:** A command to trigger a reconnect attempt.
+type attemptReconnectMsg struct{}
+
 type AppModel struct {
 	profile             profile.Profile
 	serverAddr          string
@@ -41,6 +46,10 @@ type AppModel struct {
 	statusMessage       string
 	currentUserIdentity string // Store the user's full @user@host identity
 	styles              *AppStyles
+
+	// **NEW:** State for handling automatic reconnection.
+	isReconnecting    bool
+	reconnectAttempts int
 }
 
 func NewAppModel(p profile.Profile, server string) AppModel {
@@ -51,11 +60,11 @@ func NewAppModel(p profile.Profile, server string) AppModel {
 	placeholder := newPlaceholderPanel("Coming Soon!")
 
 	return AppModel{
-		profile:     p,
-		serverAddr:  server,
-		msgChan:     msgChan,
-		sshService:  ssh.NewService(p, server, msgChan),
-		activePanel: panelChat,
+		profile:      p,
+		serverAddr:   server,
+		msgChan:      msgChan,
+		sshService:   ssh.NewService(p, server, msgChan),
+		activePanel:  panelChat,
 		panels: map[activePanel]tea.Model{
 			panelChat:      chat,
 			panelSearch:    search,
@@ -92,7 +101,6 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		navWidth := m.styles.Nav.GetWidth()
 		contentWidth := m.width - navWidth
 
-		// **FIX:** Changed height calculation from -2 to -3 to account for the new help bar.
 		contentHeight := m.height - 3
 
 		m.panels[panelChat].(*chatPanelModel).SetSize(contentWidth, contentHeight)
@@ -127,6 +135,11 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ssh.WelcomeMsg:
 		m.currentUserIdentity = msg.Identity
+		if m.isReconnecting {
+			m.isReconnecting = false
+			m.reconnectAttempts = 0
+			m.statusMessage = "Reconnected successfully!"
+		}
 		if m.panels[panelChat] != nil {
 			updatedPanel, cmd := m.panels[panelChat].Update(msg)
 			m.panels[panelChat] = updatedPanel
@@ -152,6 +165,36 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ssh.ErrorMsg:
 		m.statusMessage = "ERROR: " + msg.Error()
+		if m.isReconnecting {
+			// Calculate exponential backoff: 5s, 10s, 20s, 30s, 30s...
+			maxDelay := 30.0
+			delaySeconds := math.Min(float64(5*m.reconnectAttempts), maxDelay)
+			backoff := time.Duration(delaySeconds) * time.Second
+			m.statusMessage += fmt.Sprintf(" Retrying in %.0f seconds...", backoff.Seconds())
+			cmd := tea.Tick(backoff, func(t time.Time) tea.Msg { return attemptReconnectMsg{} })
+			cmds = append(cmds, cmd)
+		}
+		cmds = append(cmds, m.listenForMessages())
+
+	// **NEW:** Handle disconnection and initiate reconnection process.
+	case ssh.DisconnectedMsg:
+		if !m.isReconnecting {
+			m.isReconnecting = true
+			m.reconnectAttempts = 0
+			delay := 5 * time.Second
+			m.statusMessage = fmt.Sprintf("Connection lost. Retrying in %.0f seconds...", delay.Seconds())
+			cmd := tea.Tick(delay, func(t time.Time) tea.Msg { return attemptReconnectMsg{} })
+			cmds = append(cmds, cmd)
+		}
+		cmds = append(cmds, m.listenForMessages())
+
+	// **NEW:** Handle the scheduled reconnection attempt.
+	case attemptReconnectMsg:
+		if m.isReconnecting {
+			m.reconnectAttempts++
+			m.statusMessage = fmt.Sprintf("Reconnecting... (attempt %d)", m.reconnectAttempts)
+			cmds = append(cmds, m.sshService.Connect(), m.listenForMessages())
+		}
 
 	case fetchTopFilesCmd:
 		m.statusMessage = "Fetching top files..."
@@ -233,7 +276,7 @@ func (m AppModel) renderHelp() string {
 type placeholderPanel struct{ text string }
 
 func newPlaceholderPanel(text string) placeholderPanel { return placeholderPanel{text} }
-func (p placeholderPanel) Init() tea.Cmd               { return nil }
+func (p placeholderPanel) Init() tea.Cmd                  { return nil }
 func (p placeholderPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return p, nil
 }
