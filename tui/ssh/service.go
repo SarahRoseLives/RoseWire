@@ -35,7 +35,7 @@ type ErrorMsg struct{ Err error }
 
 func (e ErrorMsg) Error() string { return e.Err.Error() }
 
-// **NEW:** A message indicating the connection has been terminated.
+// A message indicating the connection has been terminated.
 type DisconnectedMsg struct{}
 
 // --- Internal JSON parsing structs ---
@@ -196,12 +196,13 @@ func (s *Service) Connect() tea.Cmd {
 			s.msgChan <- DisconnectedMsg{}
 		}()
 
-		s.msgChan <- StatusMsg{Message: fmt.Sprintf("Connected as %s", s.profile.Nickname)}
+		// **FIX:** Updated the connection message to be more descriptive.
+		s.msgChan <- StatusMsg{Message: fmt.Sprintf("Connected via SSH as %s", s.profile.Nickname)}
 		return nil
 	}
 }
 
-// **NEW:** runKeepAlive sends a ping to the server on an interval to prevent timeouts.
+// runKeepAlive sends a ping to the server on an interval to prevent timeouts.
 func (s *Service) runKeepAlive(ctx context.Context, client *ssh.Client) {
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()

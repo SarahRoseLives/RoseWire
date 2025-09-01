@@ -169,11 +169,14 @@ func (m *searchPanelModel) SetSize(w, h int) {
 	if m.textInput.Focused() {
 		barStyle = m.styles.SearchBarFocused
 	}
-	m.textInput.Width = w - barStyle.GetHorizontalPadding() - len(m.textInput.Prompt)
 
-	// **FIX:** The search bar component takes up 4 lines (border + content + margin).
-	// Changed calculation from `h - 3` to `h - 4`.
-	resultsBoxHeight := h - 4
+	// **FIX:** Use GetHorizontalFrameSize to correctly account for the
+	// search bar's borders and padding when calculating the text input width.
+	searchBarHorizontalFrameSize := barStyle.GetHorizontalFrameSize()
+	m.textInput.Width = w - searchBarHorizontalFrameSize - len(m.textInput.Prompt)
+
+	// The search bar component takes up 3 lines (1 for top border/margin, 1 for content, 1 for bottom border/margin).
+	resultsBoxHeight := h - 3
 	m.styles.ResultsBox.Width(w)
 	m.styles.ResultsBox.Height(resultsBoxHeight)
 
@@ -208,12 +211,12 @@ func DefaultSearchPanelStyles() *SearchPanelStyles {
 			BorderForeground(lipgloss.Color("205")).
 			Padding(0, 1).
 			MarginBottom(1),
-		InputPrompt:    lipgloss.NewStyle().Foreground(lipgloss.Color("205")),
-		InputText:      lipgloss.NewStyle().Foreground(lipgloss.Color("250")),
-		Spinner:        lipgloss.NewStyle().Foreground(lipgloss.Color("205")),
-		ResultsBox:     lipgloss.NewStyle().Padding(1, 2),
+		InputPrompt:     lipgloss.NewStyle().Foreground(lipgloss.Color("205")),
+		InputText:       lipgloss.NewStyle().Foreground(lipgloss.Color("250")),
+		Spinner:         lipgloss.NewStyle().Foreground(lipgloss.Color("205")),
+		ResultsBox:      lipgloss.NewStyle().Padding(1, 2),
 		ResultsViewport: lipgloss.NewStyle(),
-		ResultNormal:   lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
-		ResultSelected: lipgloss.NewStyle().Foreground(lipgloss.Color("#EC4899")).Bold(true),
+		ResultNormal:    lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		ResultSelected:  lipgloss.NewStyle().Foreground(lipgloss.Color("#EC4899")).Bold(true),
 	}
 }

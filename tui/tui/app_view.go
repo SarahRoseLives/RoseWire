@@ -32,7 +32,7 @@ var panelNames = map[activePanel]string{
 	panelNetwork:   "Network",
 }
 
-// **NEW:** A command to trigger a reconnect attempt.
+// A command to trigger a reconnect attempt.
 type attemptReconnectMsg struct{}
 
 type AppModel struct {
@@ -47,7 +47,7 @@ type AppModel struct {
 	currentUserIdentity string // Store the user's full @user@host identity
 	styles              *AppStyles
 
-	// **NEW:** State for handling automatic reconnection.
+	// State for handling automatic reconnection.
 	isReconnecting    bool
 	reconnectAttempts int
 }
@@ -98,9 +98,16 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		navWidth := m.styles.Nav.GetWidth()
+
+		// **FIX:** Correctly calculate the navigation panel's total width.
+		// The `GetMargin()` method returns all four margin values.
+		navStyle := m.styles.Nav
+		_, rightMargin, _, leftMargin := navStyle.GetMargin()
+		navWidth := navStyle.GetWidth() + leftMargin + rightMargin
+
 		contentWidth := m.width - navWidth
 
+		// The header (1), footer (1), and help (1) bars take up 3 lines of height.
 		contentHeight := m.height - 3
 
 		m.panels[panelChat].(*chatPanelModel).SetSize(contentWidth, contentHeight)
@@ -176,7 +183,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.listenForMessages())
 
-	// **NEW:** Handle disconnection and initiate reconnection process.
+	// Handle disconnection and initiate reconnection process.
 	case ssh.DisconnectedMsg:
 		if !m.isReconnecting {
 			m.isReconnecting = true
@@ -188,7 +195,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.listenForMessages())
 
-	// **NEW:** Handle the scheduled reconnection attempt.
+	// Handle the scheduled reconnection attempt.
 	case attemptReconnectMsg:
 		if m.isReconnecting {
 			m.reconnectAttempts++

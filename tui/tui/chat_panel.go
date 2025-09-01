@@ -23,7 +23,6 @@ type chatPanelModel struct {
 	currentUserIdentity string // The full @user@host identity
 }
 
-// **FIX:** Changed to return a pointer (*chatPanelModel) for consistency.
 func NewChatPanel() *chatPanelModel {
 	styles := DefaultChatPanelStyles()
 	ti := textinput.New()
@@ -45,12 +44,10 @@ func NewChatPanel() *chatPanelModel {
 	}
 }
 
-// **FIX:** Changed to pointer receiver.
 func (m *chatPanelModel) Init() tea.Cmd {
 	return textinput.Blink
 }
 
-// **FIX:** Changed to pointer receiver.
 func (m *chatPanelModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
 		tiCmd tea.Cmd
@@ -107,7 +104,6 @@ func (m *chatPanelModel) updateViewport() {
 	m.viewport.GotoBottom()
 }
 
-// **FIX:** Changed to pointer receiver.
 func (m *chatPanelModel) View() string {
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -118,9 +114,14 @@ func (m *chatPanelModel) View() string {
 
 func (m *chatPanelModel) SetSize(w, h int) {
 	m.styles.InputBox.Width(w)
-	m.textInput.Width = w - m.styles.InputBox.GetHorizontalPadding() - len(m.textInput.Prompt)
+
+	// **FIX:** Use GetHorizontalFrameSize to account for the box's borders
+	// and padding, ensuring the text input component fits perfectly.
+	inputBoxHorizontalFrameSize := m.styles.InputBox.GetHorizontalFrameSize()
+	m.textInput.Width = w - inputBoxHorizontalFrameSize - len(m.textInput.Prompt)
 
 	m.viewport.Width = w
+	// The input box takes up 3 lines of height (1 for top border, 1 for content, 1 for bottom border).
 	m.viewport.Height = h - 3
 	m.styles.Viewport.Width(w)
 	m.styles.Viewport.Height(h - 3)
