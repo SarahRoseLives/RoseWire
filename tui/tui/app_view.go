@@ -46,8 +46,8 @@ type AppModel struct {
 func NewAppModel(p profile.Profile, server string) AppModel {
 	msgChan := make(chan tea.Msg)
 	chat := NewChatPanel()
+	search := NewSearchPanel()
 
-	// Create placeholder models for other panels for now
 	placeholder := newPlaceholderPanel("Coming Soon!")
 
 	return AppModel{
@@ -57,9 +57,8 @@ func NewAppModel(p profile.Profile, server string) AppModel {
 		sshService:  ssh.NewService(p, server, msgChan),
 		activePanel: panelChat,
 		panels: map[activePanel]tea.Model{
-			// **FIX:** No longer need to take the address with `&`
 			panelChat:      chat,
-			panelSearch:    &placeholder,
+			panelSearch:    search,
 			panelLibrary:   &placeholder,
 			panelTransfers: &placeholder,
 			panelNetwork:   &placeholder,
@@ -69,15 +68,18 @@ func NewAppModel(p profile.Profile, server string) AppModel {
 	}
 }
 
-// listenForMessages is a command that waits for messages from the sshService channel.
 func (m *AppModel) listenForMessages() tea.Cmd {
 	return func() tea.Msg {
-		return <-m.msgChan // Block until a message is received
+		return <-m.msgChan
 	}
 }
 
 func (m AppModel) Init() tea.Cmd {
-	return tea.Batch(m.sshService.Connect(), m.listenForMessages())
+	return tea.Batch(
+		m.sshService.Connect(),
+		m.listenForMessages(),
+		m.panels[m.activePanel].Init(),
+	)
 }
 
 func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -89,22 +91,28 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		navWidth := m.styles.Nav.GetWidth()
 		contentWidth := m.width - navWidth
-		contentHeight := m.height - 2
+
+		// **FIX:** Changed height calculation from -2 to -3 to account for the new help bar.
+		contentHeight := m.height - 3
+
 		m.panels[panelChat].(*chatPanelModel).SetSize(contentWidth, contentHeight)
+		m.panels[panelSearch].(*searchPanelModel).SetSize(contentWidth, contentHeight)
 
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
 			m.sshService.Close()
 			return m, tea.Quit
-		case "up":
-			if m.activePanel > 0 {
+		case "tab":
+			m.activePanel = (m.activePanel + 1) % 5
+			cmds = append(cmds, m.panels[m.activePanel].Init())
+		case "shift+tab":
+			if m.activePanel == 0 {
+				m.activePanel = panelNetwork
+			} else {
 				m.activePanel--
 			}
-		case "down":
-			if m.activePanel < panelNetwork {
-				m.activePanel++
-			}
+			cmds = append(cmds, m.panels[m.activePanel].Init())
 		default:
 			if m.panels[m.activePanel] != nil {
 				updatedPanel, cmd := m.panels[m.activePanel].Update(msg)
@@ -126,7 +134,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.listenForMessages())
 
-	case ssh.SystemBroadcastMsg, ssh.ChatBroadcastMsg:
+	case ssh.ChatBroadcastMsg, ssh.SystemBroadcastMsg:
 		if m.panels[panelChat] != nil {
 			updatedPanel, cmd := m.panels[panelChat].Update(msg)
 			m.panels[panelChat] = updatedPanel
@@ -134,8 +142,39 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.listenForMessages())
 
+	case ssh.SearchResultsMsg:
+		if m.panels[panelSearch] != nil {
+			updatedPanel, cmd := m.panels[panelSearch].Update(msg)
+			m.panels[panelSearch] = updatedPanel
+			cmds = append(cmds, cmd)
+		}
+		cmds = append(cmds, m.listenForMessages())
+
 	case ssh.ErrorMsg:
 		m.statusMessage = "ERROR: " + msg.Error()
+
+	case fetchTopFilesCmd:
+		m.statusMessage = "Fetching top files..."
+		err := m.sshService.FetchTopFiles()
+		if err != nil {
+			log.Printf("Error fetching top files: %v", err)
+		}
+
+	case searchFilesCmd:
+		query := string(msg)
+		if query == "" {
+			m.statusMessage = "Fetching top files..."
+			err := m.sshService.FetchTopFiles()
+			if err != nil {
+				log.Printf("Error fetching top files: %v", err)
+			}
+		} else {
+			m.statusMessage = fmt.Sprintf("Searching for '%s'...", query)
+			err := m.sshService.SearchFiles(query)
+			if err != nil {
+				log.Printf("Error searching: %v", err)
+			}
+		}
 
 	case sendChatMsgCmd:
 		err := m.sshService.SendMessage(string(msg))
@@ -161,6 +200,7 @@ func (m AppModel) View() string {
 		m.renderHeader(),
 		main,
 		m.renderFooter(),
+		m.renderHelp(),
 	)
 }
 
@@ -185,6 +225,10 @@ func (m AppModel) renderFooter() string {
 	return m.styles.Footer.Width(m.width).Render(m.statusMessage)
 }
 
+func (m AppModel) renderHelp() string {
+	return m.styles.Help.Width(m.width).Render("Tab/Shift+Tab: Switch Panels • ↑/↓: Navigate List • Enter: Select • Ctrl+C: Quit")
+}
+
 // --- Placeholder Panel ---
 type placeholderPanel struct{ text string }
 
@@ -201,6 +245,7 @@ func (p placeholderPanel) View() string {
 type AppStyles struct {
 	Header      lipgloss.Style
 	Footer      lipgloss.Style
+	Help        lipgloss.Style
 	Nav         lipgloss.Style
 	NavActive   lipgloss.Style
 	NavInactive lipgloss.Style
@@ -215,6 +260,9 @@ func DefaultAppStyles() *AppStyles {
 		Footer: lipgloss.NewStyle().
 			Background(lipgloss.Color("236")).
 			Foreground(lipgloss.Color("250")),
+		Help: lipgloss.NewStyle().
+			Background(lipgloss.Color("234")).
+			Foreground(lipgloss.Color("244")),
 		Nav: lipgloss.NewStyle().
 			Width(15).
 			Margin(0, 2),

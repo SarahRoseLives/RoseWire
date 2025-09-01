@@ -23,6 +23,8 @@ type ChatBroadcastMsg struct {
 	Nickname string
 	Text     string
 }
+// **NEW:** A message containing parsed search results.
+type SearchResultsMsg struct{ Results []SearchResult }
 
 // A message indicating a change in the connection status.
 type StatusMsg struct{ Message string }
@@ -48,6 +50,19 @@ type broadcastPayload struct {
 	Nickname  string `json:"nickname"`
 	Text      string `json:"text"`
 }
+
+// **NEW:** Structs for parsing search results from the server.
+type SearchResult struct {
+	FileName string `json:"fileName"`
+	Size     int64  `json:"size"`
+	Peer     string `json:"peer"`
+	Hash     string `json:"Hash"`
+}
+
+type searchResultsPayload struct {
+	Results []SearchResult `json:"results"`
+}
+
 
 // --- Service ---
 
@@ -116,14 +131,12 @@ func (s *Service) Connect() tea.Cmd {
 			return ErrorMsg{fmt.Errorf("failed to get stdout pipe: %w", err)}
 		}
 
-		// **MODIFIED:** Goroutine now parses JSON before sending messages.
 		go func() {
 			scanner := bufio.NewScanner(stdout)
 			for scanner.Scan() {
 				line := scanner.Bytes()
 				var msg serverMessage
 				if err := json.Unmarshal(line, &msg); err != nil {
-					// Can't parse, send as a generic system message
 					s.msgChan <- SystemBroadcastMsg{Text: "received malformed message from server"}
 					continue
 				}
@@ -144,6 +157,12 @@ func (s *Service) Connect() tea.Cmd {
 					if err := json.Unmarshal(msg.Payload, &p); err == nil {
 						s.msgChan <- ChatBroadcastMsg{Nickname: p.Nickname, Text: p.Text}
 					}
+				// **NEW:** Handle search results.
+				case "search_results":
+					var p searchResultsPayload
+					if err := json.Unmarshal(msg.Payload, &p); err == nil {
+						s.msgChan <- SearchResultsMsg{Results: p.Results}
+					}
 				}
 			}
 			s.msgChan <- StatusMsg{Message: "Connection lost."}
@@ -152,12 +171,12 @@ func (s *Service) Connect() tea.Cmd {
 		}()
 
 		s.msgChan <- StatusMsg{Message: fmt.Sprintf("Connected as %s", s.profile.Nickname)}
-		return nil // Returning nil indicates success
+		return nil
 	}
 }
 
-// SendMessage sends a string to the chat session's stdin.
-func (s *Service) SendMessage(msg string) error {
+// sendCommand is a generic helper to send JSON commands to the server.
+func (s *Service) sendCommand(cmdType string, payload interface{}) error {
 	if s.chatSession == nil {
 		return fmt.Errorf("chat session is not active")
 	}
@@ -165,19 +184,34 @@ func (s *Service) SendMessage(msg string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get stdin pipe: %w", err)
 	}
-	// The server expects a JSON object, not a raw string.
-	// This matches the format used by the Flutter client.
-	chatCommand := fmt.Sprintf(`{"type":"chat_message","payload":{"text":"%s"}}`, jsonEscape(msg))
-	_, err = fmt.Fprintln(stdin, chatCommand)
+
+	cmd := map[string]interface{}{
+		"type":    cmdType,
+		"payload": payload,
+	}
+
+	cmdBytes, err := json.Marshal(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to marshal command: %w", err)
+	}
+
+	_, err = fmt.Fprintln(stdin, string(cmdBytes))
 	return err
 }
 
-// A simple helper to escape strings for JSON. A proper library would be better for complex cases.
-func jsonEscape(s string) string {
-	return s
+func (s *Service) SendMessage(msg string) error {
+	return s.sendCommand("chat_message", map[string]string{"text": msg})
 }
 
-// Close gracefully disconnects the service.
+// **NEW:** Methods for search functionality.
+func (s *Service) SearchFiles(query string) error {
+	return s.sendCommand("search", map[string]string{"query": query})
+}
+
+func (s *Service) FetchTopFiles() error {
+	return s.sendCommand("top_files", map[string]string{})
+}
+
 func (s *Service) Close() {
 	if s.chatSession != nil {
 		_ = s.chatSession.Close()
