@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -344,10 +345,31 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 
 	case "get_stats":
 		c.hub.mu.Lock()
+		c.hub.fileRegistry.mu.Lock()
+
 		var users []map[string]string
-		for name := range c.hub.clients {
+		// Get all users from the file registry, which includes federated users.
+		for name := range c.hub.fileRegistry.files {
+			// All users in the registry are considered "Online" due to the stale entry cleanup.
 			users = append(users, map[string]string{"nickname": name, "status": "Online"})
 		}
+
+		// Sort users to show local users first, then alphabetically.
+		localSuffix := "@" + c.hub.config.Domain
+		sort.SliceStable(users, func(i, j int) bool {
+			iIsLocal := strings.HasSuffix(users[i]["nickname"], localSuffix)
+			jIsLocal := strings.HasSuffix(users[j]["nickname"], localSuffix)
+			if iIsLocal && !jIsLocal {
+				return true
+			}
+			if !iIsLocal && jIsLocal {
+				return false
+			}
+			return users[i]["nickname"] < users[j]["nickname"]
+		})
+
+		c.hub.fileRegistry.mu.Unlock()
+
 		activeTransfers := len(c.hub.transfers)
 		c.hub.federatedTransfers.Range(func(key, value interface{}) bool {
 			activeTransfers++
@@ -360,7 +382,7 @@ func (c *ChatClient) handleMessage(msg InboundMessage) {
 		stats := NetworkStatsPayload{
 			Users:           users,
 			RelayServers:    relayServers,
-			TotalUsers:      len(users),
+			TotalUsers:      len(users), // This is now the federated count
 			ActiveTransfers: activeTransfers,
 			TotalTransfers:  totalTransfers,
 		}

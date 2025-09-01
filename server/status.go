@@ -5,6 +5,8 @@ import (
 	"html/template"
 	"net/http"
 	"os"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -40,82 +42,71 @@ func NewStatusService(hub *ChatHub, listenOn string) *StatusService {
 	}
 }
 
+// collectStatus gathers all server status information in a thread-safe way.
+func (s *StatusService) collectStatus() ServerStatus {
+	hostname, _ := os.Hostname()
+
+	s.Hub.mu.Lock()
+	s.Hub.fileRegistry.mu.Lock()
+
+	allUsers := make([]string, 0, len(s.Hub.fileRegistry.files))
+	for nick := range s.Hub.fileRegistry.files {
+		allUsers = append(allUsers, nick)
+	}
+
+	// Sort users to show local users first, then alphabetically.
+	localSuffix := "@" + s.Hub.config.Domain
+	sort.SliceStable(allUsers, func(i, j int) bool {
+		iIsLocal := strings.HasSuffix(allUsers[i], localSuffix)
+		jIsLocal := strings.HasSuffix(allUsers[j], localSuffix)
+		if iIsLocal && !jIsLocal {
+			return true // i is local, j is remote -> i comes first
+		}
+		if !iIsLocal && jIsLocal {
+			return false // i is remote, j is local -> j comes first
+		}
+		// Both are local or both are remote, sort alphabetically
+		return allUsers[i] < allUsers[j]
+	})
+
+	filesShared := 0
+	for _, entry := range s.Hub.fileRegistry.files {
+		filesShared += len(entry.Files)
+	}
+
+	s.Hub.fileRegistry.mu.Unlock()
+
+	transfers := len(s.Hub.transfers)
+	totalTransfers := s.Hub.totalTransfers
+	relayServers := 1 + len(s.Hub.config.Peers)
+	s.Hub.mu.Unlock()
+
+	return ServerStatus{
+		Hostname:          hostname,
+		Addr:              s.ListenOn,
+		StartTime:         s.StartedAt.Format(time.RFC3339),
+		UptimeSeconds:     int64(time.Since(s.StartedAt).Seconds()),
+		TotalUsers:        len(allUsers),
+		Users:             allUsers,
+		FilesShared:       filesShared,
+		TransfersInFlight: transfers,
+		TotalTransfers:    totalTransfers,
+		RelayServers:      relayServers,
+	}
+}
+
 func (s *StatusService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/api/status" {
 		s.apiStatus(w, r)
 		return
 	}
-	hostname, _ := os.Hostname()
-	users := []string{}
-	filesShared := 0
-
-	s.Hub.mu.Lock()
-	for nick := range s.Hub.clients {
-		users = append(users, nick)
-	}
-	// --- START FIX: Correctly count files from UserFileEntry ---
-	s.Hub.fileRegistry.mu.Lock()
-	for _, entry := range s.Hub.fileRegistry.files {
-		filesShared += len(entry.Files)
-	}
-	s.Hub.fileRegistry.mu.Unlock()
-	// --- END FIX ---
-	transfers := len(s.Hub.transfers)
-	totalTransfers := s.Hub.totalTransfers
-	relayServers := 1 + len(s.Hub.config.Peers)
-	s.Hub.mu.Unlock()
-
-	status := ServerStatus{
-		Hostname:          hostname,
-		Addr:              s.ListenOn,
-		StartTime:         s.StartedAt.Format(time.RFC3339),
-		UptimeSeconds:     int64(time.Since(s.StartedAt).Seconds()),
-		TotalUsers:        len(users),
-		Users:             users,
-		FilesShared:       filesShared,
-		TransfersInFlight: transfers,
-		TotalTransfers:    totalTransfers,
-		RelayServers:      relayServers,
-	}
-
+	status := s.collectStatus()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.Execute(w, status)
 }
 
 func (s *StatusService) apiStatus(w http.ResponseWriter, r *http.Request) {
-	hostname, _ := os.Hostname()
-	users := []string{}
-	filesShared := 0
-
-	s.Hub.mu.Lock()
-	for nick := range s.Hub.clients {
-		users = append(users, nick)
-	}
-	// --- START FIX: Correctly count files from UserFileEntry for API ---
-	s.Hub.fileRegistry.mu.Lock()
-	for _, entry := range s.Hub.fileRegistry.files {
-		filesShared += len(entry.Files)
-	}
-	s.Hub.fileRegistry.mu.Unlock()
-	// --- END FIX ---
-	transfers := len(s.Hub.transfers)
-	totalTransfers := s.Hub.totalTransfers
-	relayServers := 1 + len(s.Hub.config.Peers)
-	s.Hub.mu.Unlock()
-
-	status := ServerStatus{
-		Hostname:          hostname,
-		Addr:              s.ListenOn,
-		StartTime:         s.StartedAt.Format(time.RFC3339),
-		UptimeSeconds:     int64(time.Since(s.StartedAt).Seconds()),
-		TotalUsers:        len(users),
-		Users:             users,
-		FilesShared:       filesShared,
-		TransfersInFlight: transfers,
-		TotalTransfers:    totalTransfers,
-		RelayServers:      relayServers,
-	}
-
+	status := s.collectStatus()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
 }

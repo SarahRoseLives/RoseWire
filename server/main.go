@@ -34,7 +34,7 @@ const (
 	configFile            = "config.json"
 	defaultSshListenAddr  = "0.0.0.0:2222"
 	defaultHttpListenAddr = "0.0.0.0:8080"
-	serverVersion         = "1.0.4"
+	serverVersion         = "1.0.5"
 	gossipFanout          = 3 // The number of peers to gossip with in each cycle
 )
 
