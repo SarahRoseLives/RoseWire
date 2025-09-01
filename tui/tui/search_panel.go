@@ -170,13 +170,13 @@ func (m *searchPanelModel) SetSize(w, h int) {
 		barStyle = m.styles.SearchBarFocused
 	}
 
-	// **FIX:** Use GetHorizontalFrameSize to correctly account for the
-	// search bar's borders and padding when calculating the text input width.
 	searchBarHorizontalFrameSize := barStyle.GetHorizontalFrameSize()
 	m.textInput.Width = w - searchBarHorizontalFrameSize - len(m.textInput.Prompt)
 
-	// The search bar component takes up 3 lines (1 for top border/margin, 1 for content, 1 for bottom border/margin).
-	resultsBoxHeight := h - 3
+	// **FIX:** The search bar component takes up 4 lines total
+	// (1 for top border, 1 for content, 1 for bottom border, and 1 for margin).
+	// The height calculation is now correct.
+	resultsBoxHeight := h - 4
 	m.styles.ResultsBox.Width(w)
 	m.styles.ResultsBox.Height(resultsBoxHeight)
 

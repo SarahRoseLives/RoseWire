@@ -27,6 +27,15 @@ type ChatBroadcastMsg struct {
 }
 type SearchResultsMsg struct{ Results []SearchResult }
 
+// **NEW:** A message containing parsed network statistics.
+type NetworkStatsMsg struct {
+	Users           []NetworkUser `json:"users"`
+	RelayServers    int           `json:"relayServers"`
+	TotalUsers      int           `json:"totalUsers"`
+	TotalTransfers  int           `json:"totalTransfers"`
+	ActiveTransfers int           `json:"activeTransfers"`
+}
+
 // A message indicating a change in the connection status.
 type StatusMsg struct{ Message string }
 
@@ -64,6 +73,12 @@ type SearchResult struct {
 
 type searchResultsPayload struct {
 	Results []SearchResult `json:"results"`
+}
+
+// **NEW:** Struct for a user in the network stats list.
+type NetworkUser struct {
+	Nickname string `json:"nickname"`
+	Status   string `json:"status"`
 }
 
 // --- Service ---
@@ -189,6 +204,12 @@ func (s *Service) Connect() tea.Cmd {
 					if err := json.Unmarshal(msg.Payload, &p); err == nil {
 						s.msgChan <- SearchResultsMsg{Results: p.Results}
 					}
+				// **NEW:** Handle network stats.
+				case "network_stats":
+					var p NetworkStatsMsg
+					if err := json.Unmarshal(msg.Payload, &p); err == nil {
+						s.msgChan <- p
+					}
 				}
 			}
 			// When scanner.Scan() returns false, the connection is broken.
@@ -196,7 +217,6 @@ func (s *Service) Connect() tea.Cmd {
 			s.msgChan <- DisconnectedMsg{}
 		}()
 
-		// **FIX:** Updated the connection message to be more descriptive.
 		s.msgChan <- StatusMsg{Message: fmt.Sprintf("Connected via SSH as %s", s.profile.Nickname)}
 		return nil
 	}
@@ -220,8 +240,6 @@ func (s *Service) runKeepAlive(ctx context.Context, client *ssh.Client) {
 			_, _, err := client.SendRequest("keepalive@golang.org", true, nil)
 			s.mu.Unlock()
 			if err != nil {
-				// The connection is likely dead. The main stdout reader will detect
-				// this and trigger the reconnect logic. We can just exit here.
 				return
 			}
 		}
@@ -265,6 +283,11 @@ func (s *Service) SearchFiles(query string) error {
 
 func (s *Service) FetchTopFiles() error {
 	return s.sendCommand("top_files", map[string]string{})
+}
+
+// **NEW:** Method for requesting network stats.
+func (s *Service) RequestNetworkStats() error {
+	return s.sendCommand("get_stats", map[string]string{})
 }
 
 func (s *Service) Close() {

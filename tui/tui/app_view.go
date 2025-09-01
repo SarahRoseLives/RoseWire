@@ -56,6 +56,7 @@ func NewAppModel(p profile.Profile, server string) AppModel {
 	msgChan := make(chan tea.Msg)
 	chat := NewChatPanel()
 	search := NewSearchPanel()
+	network := NewNetworkPanel() // **NEW:** Create network panel
 
 	placeholder := newPlaceholderPanel("Coming Soon!")
 
@@ -70,7 +71,7 @@ func NewAppModel(p profile.Profile, server string) AppModel {
 			panelSearch:    search,
 			panelLibrary:   &placeholder,
 			panelTransfers: &placeholder,
-			panelNetwork:   &placeholder,
+			panelNetwork:   network, // **NEW:** Add network panel to map
 		},
 		statusMessage: "Initializing...",
 		styles:        DefaultAppStyles(),
@@ -99,21 +100,26 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// **FIX:** Correctly calculate the navigation panel's total width.
-		// The `GetMargin()` method returns all four margin values.
 		navStyle := m.styles.Nav
 		_, rightMargin, _, leftMargin := navStyle.GetMargin()
 		navWidth := navStyle.GetWidth() + leftMargin + rightMargin
 
 		contentWidth := m.width - navWidth
-
-		// The header (1), footer (1), and help (1) bars take up 3 lines of height.
 		contentHeight := m.height - 3
 
 		m.panels[panelChat].(*chatPanelModel).SetSize(contentWidth, contentHeight)
 		m.panels[panelSearch].(*searchPanelModel).SetSize(contentWidth, contentHeight)
+		m.panels[panelNetwork].(*networkPanelModel).SetSize(contentWidth, contentHeight) // **NEW:** Set size for network panel
 
 	case tea.KeyMsg:
+		// Let the active panel handle the key press first
+		if m.panels[m.activePanel] != nil {
+			updatedPanel, cmd := m.panels[m.activePanel].Update(msg)
+			m.panels[m.activePanel] = updatedPanel
+			cmds = append(cmds, cmd)
+		}
+
+		// Then handle global key presses
 		switch msg.String() {
 		case "ctrl+c":
 			m.sshService.Close()
@@ -128,12 +134,6 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activePanel--
 			}
 			cmds = append(cmds, m.panels[m.activePanel].Init())
-		default:
-			if m.panels[m.activePanel] != nil {
-				updatedPanel, cmd := m.panels[m.activePanel].Update(msg)
-				m.panels[m.activePanel] = updatedPanel
-				cmds = append(cmds, cmd)
-			}
 		}
 
 	case ssh.StatusMsg:
@@ -170,10 +170,18 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.listenForMessages())
 
+	// **NEW:** Handle network stats message and forward to the correct panel.
+	case ssh.NetworkStatsMsg:
+		if m.panels[panelNetwork] != nil {
+			updatedPanel, cmd := m.panels[panelNetwork].Update(msg)
+			m.panels[panelNetwork] = updatedPanel
+			cmds = append(cmds, cmd)
+		}
+		cmds = append(cmds, m.listenForMessages())
+
 	case ssh.ErrorMsg:
 		m.statusMessage = "ERROR: " + msg.Error()
 		if m.isReconnecting {
-			// Calculate exponential backoff: 5s, 10s, 20s, 30s, 30s...
 			maxDelay := 30.0
 			delaySeconds := math.Min(float64(5*m.reconnectAttempts), maxDelay)
 			backoff := time.Duration(delaySeconds) * time.Second
@@ -183,7 +191,6 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.listenForMessages())
 
-	// Handle disconnection and initiate reconnection process.
 	case ssh.DisconnectedMsg:
 		if !m.isReconnecting {
 			m.isReconnecting = true
@@ -195,7 +202,6 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.listenForMessages())
 
-	// Handle the scheduled reconnection attempt.
 	case attemptReconnectMsg:
 		if m.isReconnecting {
 			m.reconnectAttempts++
@@ -230,6 +236,13 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		err := m.sshService.SendMessage(string(msg))
 		if err != nil {
 			log.Printf("Error sending message: %v", err)
+		}
+	// **NEW:** Handle stats request from network panel.
+	case requestNetworkStatsCmd:
+		m.statusMessage = "Refreshing network stats..."
+		err := m.sshService.RequestNetworkStats()
+		if err != nil {
+			log.Printf("Error requesting stats: %v", err)
 		}
 	}
 
@@ -275,8 +288,22 @@ func (m AppModel) renderFooter() string {
 	return m.styles.Footer.Width(m.width).Render(m.statusMessage)
 }
 
+// **NEW:** Help text is now dynamic based on the active panel.
 func (m AppModel) renderHelp() string {
-	return m.styles.Help.Width(m.width).Render("Tab/Shift+Tab: Switch Panels • ↑/↓: Navigate List • Enter: Select • Ctrl+C: Quit")
+	baseHelp := "Tab/Shift+Tab: Switch Panels • Ctrl+C: Quit"
+	var panelHelp string
+
+	switch m.activePanel {
+	case panelSearch:
+		panelHelp = "↑/↓: Navigate • Enter: Search"
+	case panelNetwork:
+		panelHelp = "↑/↓: Scroll List • r: Refresh Stats"
+	}
+
+	if panelHelp != "" {
+		return m.styles.Help.Width(m.width).Render(baseHelp + " • " + panelHelp)
+	}
+	return m.styles.Help.Width(m.width).Render(baseHelp)
 }
 
 // --- Placeholder Panel ---
