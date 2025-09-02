@@ -129,10 +129,8 @@ func (m *networkPanelModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
 
-	// **FIX:** Increased fixed height to correctly account for all elements.
-	// Stat boxes (border + padding + content) take up ~5 lines.
-	// Users header (padding + content) takes up 3 lines. Total is 8.
-	const fixedHeight = 8
+	// **FIX:** The stats boxes (6 lines) and the header (3 lines) take up 9 lines total.
+	const fixedHeight = 9
 	m.viewport.Width = w
 	m.viewport.Height = h - fixedHeight
 	m.styles.UserList.Width(w)
