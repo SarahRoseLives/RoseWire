@@ -82,17 +82,23 @@ func (m *searchPanelModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "up":
 				if m.cursor > 0 {
 					m.cursor--
-					m.updateViewportContent() // re-render on change
+					m.updateViewportContent()
 				} else {
 					m.textInput.Focus()
 				}
 			case "down":
 				if m.cursor < len(m.results)-1 {
 					m.cursor++
-					m.updateViewportContent() // re-render on change
+					m.updateViewportContent()
 				}
 			case "enter":
-				// Placeholder for download functionality
+				// **NEW:** Initiate a download when Enter is pressed on a result.
+				if len(m.results) > 0 && m.cursor < len(m.results) {
+					selectedFile := m.results[m.cursor]
+					return m, func() tea.Msg {
+						return downloadFileCmd{file: selectedFile}
+					}
+				}
 			}
 		}
 
@@ -173,16 +179,13 @@ func (m *searchPanelModel) SetSize(w, h int) {
 	searchBarHorizontalFrameSize := barStyle.GetHorizontalFrameSize()
 	m.textInput.Width = w - searchBarHorizontalFrameSize - len(m.textInput.Prompt)
 
-	// **FIX:** The search bar component takes up 4 lines total
-	// (1 for top border, 1 for content, 1 for bottom border, and 1 for margin).
-	// The height calculation is now correct.
 	resultsBoxHeight := h - 4
 	m.styles.ResultsBox.Width(w)
 	m.styles.ResultsBox.Height(resultsBoxHeight)
 
 	m.viewport.Width = w - m.styles.ResultsBox.GetHorizontalPadding()
 	m.viewport.Height = resultsBoxHeight - m.styles.ResultsBox.GetVerticalPadding()
-	m.updateViewportContent() // Re-render content on resize
+	m.updateViewportContent()
 }
 
 // --- Styling ---

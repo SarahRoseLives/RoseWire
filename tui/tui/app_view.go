@@ -32,7 +32,6 @@ var panelNames = map[activePanel]string{
 	panelNetwork:   "Network",
 }
 
-// A command to trigger a reconnect attempt.
 type attemptReconnectMsg struct{}
 
 type AppModel struct {
@@ -40,25 +39,23 @@ type AppModel struct {
 	serverAddr          string
 	width, height       int
 	sshService          *ssh.Service
-	msgChan             chan tea.Msg // Channel for SSH service to send messages
+	msgChan             chan tea.Msg
 	activePanel         activePanel
 	panels              map[activePanel]tea.Model
 	statusMessage       string
-	currentUserIdentity string // Store the user's full @user@host identity
+	currentUserIdentity string
 	styles              *AppStyles
-
-	// State for handling automatic reconnection.
-	isReconnecting    bool
-	reconnectAttempts int
+	isReconnecting      bool
+	reconnectAttempts   int
 }
 
 func NewAppModel(p profile.Profile, server string) AppModel {
 	msgChan := make(chan tea.Msg)
 	chat := NewChatPanel()
 	search := NewSearchPanel()
-	network := NewNetworkPanel() // **NEW:** Create network panel
-
-	placeholder := newPlaceholderPanel("Coming Soon!")
+	network := NewNetworkPanel()
+	library := NewLibraryPanel()
+	transfers := NewTransfersPanel()
 
 	return AppModel{
 		profile:      p,
@@ -66,12 +63,13 @@ func NewAppModel(p profile.Profile, server string) AppModel {
 		msgChan:      msgChan,
 		sshService:   ssh.NewService(p, server, msgChan),
 		activePanel:  panelChat,
+		// **FIX:** Ensure the new panels are correctly assigned, replacing the placeholders.
 		panels: map[activePanel]tea.Model{
 			panelChat:      chat,
 			panelSearch:    search,
-			panelLibrary:   &placeholder,
-			panelTransfers: &placeholder,
-			panelNetwork:   network, // **NEW:** Add network panel to map
+			panelLibrary:   library,
+			panelTransfers: transfers,
+			panelNetwork:   network,
 		},
 		statusMessage: "Initializing...",
 		styles:        DefaultAppStyles(),
@@ -95,31 +93,57 @@ func (m AppModel) Init() tea.Cmd {
 func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// Route messages to the correct panel first
+	switch msg.(type) {
+	case ssh.ChatBroadcastMsg, ssh.SystemBroadcastMsg, ssh.WelcomeMsg:
+		if m.panels[panelChat] != nil {
+			updatedPanel, cmd := m.panels[panelChat].Update(msg)
+			m.panels[panelChat] = updatedPanel
+			cmds = append(cmds, cmd)
+		}
+	case ssh.SearchResultsMsg:
+		if m.panels[panelSearch] != nil {
+			updatedPanel, cmd := m.panels[panelSearch].Update(msg)
+			m.panels[panelSearch] = updatedPanel
+			cmds = append(cmds, cmd)
+		}
+	case ssh.NetworkStatsMsg:
+		if m.panels[panelNetwork] != nil {
+			updatedPanel, cmd := m.panels[panelNetwork].Update(msg)
+			m.panels[panelNetwork] = updatedPanel
+			cmds = append(cmds, cmd)
+		}
+	case ssh.TransfersUpdateMsg:
+		if m.panels[panelTransfers] != nil {
+			updatedPanel, cmd := m.panels[panelTransfers].Update(msg)
+			m.panels[panelTransfers] = updatedPanel
+			cmds = append(cmds, cmd)
+		}
+	}
+
+	// Handle global messages and commands
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-
 		navStyle := m.styles.Nav
 		_, rightMargin, _, leftMargin := navStyle.GetMargin()
 		navWidth := navStyle.GetWidth() + leftMargin + rightMargin
-
 		contentWidth := m.width - navWidth
 		contentHeight := m.height - 3
 
 		m.panels[panelChat].(*chatPanelModel).SetSize(contentWidth, contentHeight)
 		m.panels[panelSearch].(*searchPanelModel).SetSize(contentWidth, contentHeight)
-		m.panels[panelNetwork].(*networkPanelModel).SetSize(contentWidth, contentHeight) // **NEW:** Set size for network panel
+		m.panels[panelNetwork].(*networkPanelModel).SetSize(contentWidth, contentHeight)
+		m.panels[panelLibrary].(*libraryPanelModel).SetSize(contentWidth, contentHeight)
+		m.panels[panelTransfers].(*transfersPanelModel).SetSize(contentWidth, contentHeight)
 
 	case tea.KeyMsg:
-		// Let the active panel handle the key press first
-		if m.panels[m.activePanel] != nil {
-			updatedPanel, cmd := m.panels[m.activePanel].Update(msg)
-			m.panels[m.activePanel] = updatedPanel
-			cmds = append(cmds, cmd)
-		}
-
-		// Then handle global key presses
+		// Let active panel handle its own keys first
+		updatedPanel, cmd := m.panels[m.activePanel].Update(msg)
+		m.panels[m.activePanel] = updatedPanel
+		cmds = append(cmds, cmd)
+		// Then handle global keys
 		switch msg.String() {
 		case "ctrl+c":
 			m.sshService.Close()
@@ -139,7 +163,6 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ssh.StatusMsg:
 		m.statusMessage = msg.Message
 		cmds = append(cmds, m.listenForMessages())
-
 	case ssh.WelcomeMsg:
 		m.currentUserIdentity = msg.Identity
 		if m.isReconnecting {
@@ -147,36 +170,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.reconnectAttempts = 0
 			m.statusMessage = "Reconnected successfully!"
 		}
-		if m.panels[panelChat] != nil {
-			updatedPanel, cmd := m.panels[panelChat].Update(msg)
-			m.panels[panelChat] = updatedPanel
-			cmds = append(cmds, cmd)
-		}
 		cmds = append(cmds, m.listenForMessages())
 
-	case ssh.ChatBroadcastMsg, ssh.SystemBroadcastMsg:
-		if m.panels[panelChat] != nil {
-			updatedPanel, cmd := m.panels[panelChat].Update(msg)
-			m.panels[panelChat] = updatedPanel
-			cmds = append(cmds, cmd)
-		}
-		cmds = append(cmds, m.listenForMessages())
-
-	case ssh.SearchResultsMsg:
-		if m.panels[panelSearch] != nil {
-			updatedPanel, cmd := m.panels[panelSearch].Update(msg)
-			m.panels[panelSearch] = updatedPanel
-			cmds = append(cmds, cmd)
-		}
-		cmds = append(cmds, m.listenForMessages())
-
-	// **NEW:** Handle network stats message and forward to the correct panel.
-	case ssh.NetworkStatsMsg:
-		if m.panels[panelNetwork] != nil {
-			updatedPanel, cmd := m.panels[panelNetwork].Update(msg)
-			m.panels[panelNetwork] = updatedPanel
-			cmds = append(cmds, cmd)
-		}
+	// Generic listener append for messages handled by panels
+	case ssh.ChatBroadcastMsg, ssh.SystemBroadcastMsg, ssh.SearchResultsMsg, ssh.NetworkStatsMsg, ssh.TransfersUpdateMsg:
 		cmds = append(cmds, m.listenForMessages())
 
 	case ssh.ErrorMsg:
@@ -190,7 +187,6 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 		cmds = append(cmds, m.listenForMessages())
-
 	case ssh.DisconnectedMsg:
 		if !m.isReconnecting {
 			m.isReconnecting = true
@@ -201,7 +197,6 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 		cmds = append(cmds, m.listenForMessages())
-
 	case attemptReconnectMsg:
 		if m.isReconnecting {
 			m.reconnectAttempts++
@@ -209,40 +204,54 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.sshService.Connect(), m.listenForMessages())
 		}
 
+	// --- Panel-specific Commands ---
 	case fetchTopFilesCmd:
 		m.statusMessage = "Fetching top files..."
-		err := m.sshService.FetchTopFiles()
-		if err != nil {
+		if err := m.sshService.FetchTopFiles(); err != nil {
 			log.Printf("Error fetching top files: %v", err)
 		}
-
 	case searchFilesCmd:
 		query := string(msg)
-		if query == "" {
-			m.statusMessage = "Fetching top files..."
-			err := m.sshService.FetchTopFiles()
-			if err != nil {
-				log.Printf("Error fetching top files: %v", err)
-			}
-		} else {
-			m.statusMessage = fmt.Sprintf("Searching for '%s'...", query)
-			err := m.sshService.SearchFiles(query)
-			if err != nil {
-				log.Printf("Error searching: %v", err)
-			}
+		m.statusMessage = fmt.Sprintf("Searching for '%s'...", query)
+		if err := m.sshService.SearchFiles(query); err != nil {
+			log.Printf("Error searching: %v", err)
 		}
-
 	case sendChatMsgCmd:
-		err := m.sshService.SendMessage(string(msg))
-		if err != nil {
+		if err := m.sshService.SendMessage(string(msg)); err != nil {
 			log.Printf("Error sending message: %v", err)
 		}
-	// **NEW:** Handle stats request from network panel.
 	case requestNetworkStatsCmd:
 		m.statusMessage = "Refreshing network stats..."
-		err := m.sshService.RequestNetworkStats()
-		if err != nil {
+		if err := m.sshService.RequestNetworkStats(); err != nil {
 			log.Printf("Error requesting stats: %v", err)
+		}
+	case shareFilesCmd:
+		m.statusMessage = fmt.Sprintf("Sharing %d files...", len(msg.files))
+		if err := m.sshService.ShareFiles(msg.files); err != nil {
+			log.Printf("Error sharing files: %v", err)
+		}
+	case downloadFileCmd:
+		m.statusMessage = fmt.Sprintf("Requesting download: %s", msg.file.FileName)
+		if err := m.sshService.DownloadFile(msg.file); err != nil {
+			log.Printf("Error requesting download: %v", err)
+		}
+		// Also switch to transfers panel
+		m.activePanel = panelTransfers
+	case retryDownloadCmd:
+		m.statusMessage = fmt.Sprintf("Retrying download: %s", msg.transfer.FileName)
+		searchResult := ssh.SearchResult{FileName: msg.transfer.FileName, Peer: msg.transfer.FromUser, Size: msg.transfer.Size}
+		if err := m.sshService.DownloadFile(searchResult); err != nil {
+			log.Printf("Error retrying download: %v", err)
+		}
+
+	// Route any other message to the active panel.
+	// This is important for spinner ticks, etc.
+	default:
+		// Make sure panel isn't nil before updating.
+		if m.panels[m.activePanel] != nil {
+			updatedPanel, cmd := m.panels[m.activePanel].Update(msg)
+			m.panels[m.activePanel] = updatedPanel
+			cmds = append(cmds, cmd)
 		}
 	}
 
@@ -255,7 +264,10 @@ func (m AppModel) View() string {
 	}
 
 	nav := m.renderNav()
-	content := m.panels[m.activePanel].View()
+	content := ""
+	if m.panels[m.activePanel] != nil {
+		content = m.panels[m.activePanel].View()
+	}
 
 	main := lipgloss.JoinHorizontal(lipgloss.Top, nav, content)
 
@@ -288,34 +300,25 @@ func (m AppModel) renderFooter() string {
 	return m.styles.Footer.Width(m.width).Render(m.statusMessage)
 }
 
-// **NEW:** Help text is now dynamic based on the active panel.
 func (m AppModel) renderHelp() string {
 	baseHelp := "Tab/Shift+Tab: Switch Panels • Ctrl+C: Quit"
 	var panelHelp string
 
 	switch m.activePanel {
 	case panelSearch:
-		panelHelp = "↑/↓: Navigate • Enter: Search"
+		panelHelp = "↑/↓: Navigate • Enter: Download"
 	case panelNetwork:
 		panelHelp = "↑/↓: Scroll List • r: Refresh Stats"
+	case panelLibrary:
+		panelHelp = "↑/↓: Scroll List • s: Set Path • r: Refresh"
+	case panelTransfers:
+		panelHelp = "↑/↓: Select • r: Retry Failed"
 	}
 
 	if panelHelp != "" {
 		return m.styles.Help.Width(m.width).Render(baseHelp + " • " + panelHelp)
 	}
 	return m.styles.Help.Width(m.width).Render(baseHelp)
-}
-
-// --- Placeholder Panel ---
-type placeholderPanel struct{ text string }
-
-func newPlaceholderPanel(text string) placeholderPanel { return placeholderPanel{text} }
-func (p placeholderPanel) Init() tea.Cmd                  { return nil }
-func (p placeholderPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return p, nil
-}
-func (p placeholderPanel) View() string {
-	return lipgloss.NewStyle().Padding(2, 2).Render(p.text)
 }
 
 // --- Styling ---
