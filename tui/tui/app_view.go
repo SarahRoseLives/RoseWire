@@ -58,12 +58,11 @@ func NewAppModel(p profile.Profile, server string) AppModel {
 	transfers := NewTransfersPanel()
 
 	return AppModel{
-		profile:      p,
-		serverAddr:   server,
-		msgChan:      msgChan,
-		sshService:   ssh.NewService(p, server, msgChan),
-		activePanel:  panelChat,
-		// **FIX:** Ensure the new panels are correctly assigned, replacing the placeholders.
+		profile:    p,
+		serverAddr: server,
+		msgChan:    msgChan,
+		sshService: ssh.NewService(p, server, msgChan),
+		activePanel: panelChat,
 		panels: map[activePanel]tea.Model{
 			panelChat:      chat,
 			panelSearch:    search,
@@ -130,7 +129,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_, rightMargin, _, leftMargin := navStyle.GetMargin()
 		navWidth := navStyle.GetWidth() + leftMargin + rightMargin
 		contentWidth := m.width - navWidth
-		contentHeight := m.height - 3
+		contentHeight := m.height - 3 // Header, Footer, Help lines
+
+		// Set nav height to fix the floating footer issue
+		m.styles.Nav.Height(contentHeight)
 
 		m.panels[panelChat].(*chatPanelModel).SetSize(contentWidth, contentHeight)
 		m.panels[panelSearch].(*searchPanelModel).SetSize(contentWidth, contentHeight)
@@ -205,6 +207,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	// --- Panel-specific Commands ---
+	case setLibraryPathCmd:
+		if m.sshService != nil {
+			m.sshService.SetLibraryPath(string(msg))
+		}
 	case fetchTopFilesCmd:
 		m.statusMessage = "Fetching top files..."
 		if err := m.sshService.FetchTopFiles(); err != nil {
@@ -239,7 +245,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activePanel = panelTransfers
 	case retryDownloadCmd:
 		m.statusMessage = fmt.Sprintf("Retrying download: %s", msg.transfer.FileName)
-		searchResult := ssh.SearchResult{FileName: msg.transfer.FileName, Peer: msg.transfer.FromUser, Size: msg.transfer.Size}
+		searchResult := ssh.SearchResult{FileName: msg.transfer.FileName, Peer: msg.transfer.FromUser, Size: msg.transfer.Size, Hash: msg.transfer.Hash}
 		if err := m.sshService.DownloadFile(searchResult); err != nil {
 			log.Printf("Error retrying download: %v", err)
 		}
@@ -259,9 +265,13 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m AppModel) View() string {
-	if m.width == 0 {
+	if m.width == 0 || m.height == 0 {
 		return "Loading..."
 	}
+
+	header := m.renderHeader()
+	footer := m.renderFooter()
+	help := m.renderHelp()
 
 	nav := m.renderNav()
 	content := ""
@@ -272,10 +282,10 @@ func (m AppModel) View() string {
 	main := lipgloss.JoinHorizontal(lipgloss.Top, nav, content)
 
 	return lipgloss.JoinVertical(lipgloss.Left,
-		m.renderHeader(),
+		header,
 		main,
-		m.renderFooter(),
-		m.renderHelp(),
+		footer,
+		help,
 	)
 }
 

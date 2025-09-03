@@ -14,8 +14,10 @@ import (
 )
 
 // --- Command Messages ---
-type searchFilesCmd string
-type fetchTopFilesCmd struct{}
+// Note: These are defined in app_view.go
+// type searchFilesCmd string
+// type fetchTopFilesCmd struct{}
+// type downloadFileCmd struct{ file ssh.SearchResult }
 
 type searchPanelModel struct {
 	textInput   textinput.Model
@@ -92,7 +94,6 @@ func (m *searchPanelModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.updateViewportContent()
 				}
 			case "enter":
-				// **NEW:** Initiate a download when Enter is pressed on a result.
 				if len(m.results) > 0 && m.cursor < len(m.results) {
 					selectedFile := m.results[m.cursor]
 					return m, func() tea.Msg {

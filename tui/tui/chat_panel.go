@@ -12,9 +12,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// A command to send a chat message via the SSH service.
-type sendChatMsgCmd string
-
 type chatPanelModel struct {
 	viewport            viewport.Model
 	textInput           textinput.Model
@@ -115,8 +112,6 @@ func (m *chatPanelModel) View() string {
 func (m *chatPanelModel) SetSize(w, h int) {
 	m.styles.InputBox.Width(w)
 
-	// **FIX:** Use GetHorizontalFrameSize to account for the box's borders
-	// and padding, ensuring the text input component fits perfectly.
 	inputBoxHorizontalFrameSize := m.styles.InputBox.GetHorizontalFrameSize()
 	m.textInput.Width = w - inputBoxHorizontalFrameSize - len(m.textInput.Prompt)
 

@@ -4,12 +4,17 @@ package ssh
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"rosetui/profile"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -76,19 +81,27 @@ type Transfer struct {
 	Error    string
 	Speed    string
 	Progress float64
+	Hash     string
 }
 type transferStartPayload struct {
 	TransferID string `json:"transferID"`
 	FileName   string `json:"fileName"`
 	Size       int64  `json:"size"`
 	FromUser   string `json:"fromUser"`
+	Hash       string `json:"Hash"`
 }
 type transferErrorPayload struct {
 	TransferID string `json:"transferID"`
 	Message    string `json:"message"`
 }
+type uploadRequestPayload struct {
+	TransferID string `json:"transferID"`
+	FileName   string `json:"fileName"`
+}
 
 // --- Service ---
+const numStreams = 50 // Number of concurrent streams for transfers
+
 type Service struct {
 	client        *ssh.Client
 	chatSession   *ssh.Session
@@ -98,15 +111,23 @@ type Service struct {
 	stopKeepAlive context.CancelFunc
 	mu            sync.Mutex
 	transfers     map[string]*Transfer
+	libraryPath   string
 }
 
 func NewService(p profile.Profile, serverAddr string, msgChan chan tea.Msg) *Service {
 	return &Service{
-		profile:   p,
+		profile:    p,
 		serverAddr: serverAddr,
 		msgChan:    msgChan,
-		transfers: make(map[string]*Transfer),
+		transfers:  make(map[string]*Transfer),
 	}
+}
+
+// SetLibraryPath sets the directory for saving downloaded files and finding uploaded files.
+func (s *Service) SetLibraryPath(path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.libraryPath = path
 }
 
 func (s *Service) Connect() tea.Cmd {
@@ -227,6 +248,11 @@ func (s *Service) Connect() tea.Cmd {
 					if err := json.Unmarshal(msg.Payload, &p); err == nil {
 						s.handleTransferError(p)
 					}
+				case "upload_request":
+					var p uploadRequestPayload
+					if err := json.Unmarshal(msg.Payload, &p); err == nil {
+						go s.handleUploadRequest(p)
+					}
 				}
 			}
 			s.Close()
@@ -237,6 +263,7 @@ func (s *Service) Connect() tea.Cmd {
 		return nil
 	}
 }
+
 func (s *Service) runKeepAlive(ctx context.Context, client *ssh.Client) {
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
@@ -259,6 +286,7 @@ func (s *Service) runKeepAlive(ctx context.Context, client *ssh.Client) {
 		}
 	}
 }
+
 func (s *Service) sendCommand(cmdType string, payload interface{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -288,21 +316,45 @@ func (s *Service) sendCommand(cmdType string, payload interface{}) error {
 func (s *Service) SendMessage(msg string) error {
 	return s.sendCommand("chat_message", map[string]string{"text": msg})
 }
+
 func (s *Service) SearchFiles(query string) error {
 	return s.sendCommand("search", map[string]string{"query": query})
 }
+
 func (s *Service) FetchTopFiles() error {
 	return s.sendCommand("top_files", map[string]string{})
 }
+
 func (s *Service) RequestNetworkStats() error {
 	return s.sendCommand("get_stats", map[string]string{})
 }
+
 func (s *Service) ShareFiles(files []ShareableFile) error {
 	return s.sendCommand("share", map[string][]ShareableFile{"files": files})
 }
+
 func (s *Service) DownloadFile(file SearchResult) error {
-	return s.sendCommand("get_file", map[string]string{"fileName": file.FileName, "peer": file.Peer})
+	payload := map[string]string{
+		"fileName": file.FileName,
+		"peer":     file.Peer,
+		"Hash":     file.Hash,
+	}
+	return s.sendCommand("get_file", payload)
 }
+
+func (s *Service) sendUploadError(transferID, message string) error {
+	return s.sendCommand("upload_error", map[string]string{
+		"transferID": transferID,
+		"message":    message,
+	})
+}
+
+func (s *Service) sendUploadDone(transferID string) error {
+	return s.sendCommand("upload_done", map[string]string{
+		"transferID": transferID,
+	})
+}
+
 func (s *Service) handleTransferStart(p transferStartPayload) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -312,13 +364,15 @@ func (s *Service) handleTransferStart(p transferStartPayload) {
 		FileName: p.FileName,
 		FromUser: p.FromUser,
 		Size:     p.Size,
-		Status:   "Active",
+		Status:   "Pending",
+		Hash:     p.Hash,
 	}
 	s.transfers[p.TransferID] = transfer
 	s.publishTransfers()
 
-	go s.simulateDownload(p.TransferID)
+	go s.startDownload(p)
 }
+
 func (s *Service) handleTransferError(p transferErrorPayload) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -330,46 +384,267 @@ func (s *Service) handleTransferError(p transferErrorPayload) {
 		s.publishTransfers()
 	}
 }
-func (s *Service) simulateDownload(transferID string) {
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-	lastProgressTime := time.Now()
-	var lastProgressBytes int64
 
-	for range ticker.C {
-		s.mu.Lock()
-		t, ok := s.transfers[transferID]
-		if !ok || t.Status != "Active" {
-			s.mu.Unlock()
-			return
-		}
+func (s *Service) handleUploadRequest(p uploadRequestPayload) {
+	s.mu.Lock()
+	libPath := s.libraryPath
+	client := s.client
+	s.mu.Unlock()
 
-		t.Progress += 0.02
-		if t.Progress >= 1.0 {
-			t.Progress = 1.0
-			t.Status = "Complete"
-			t.Speed = ""
-			s.publishTransfers()
-			s.mu.Unlock()
-			return
-		}
+	if libPath == "" {
+		_ = s.sendUploadError(p.TransferID, "Library path not set on client")
+		return
+	}
+	if client == nil {
+		_ = s.sendUploadError(p.TransferID, "Client not connected")
+		return
+	}
 
-		now := time.Now()
-		elapsed := now.Sub(lastProgressTime).Seconds()
-		if elapsed > 0.5 {
-			currentBytes := int64(t.Progress * float64(t.Size))
-			bytesSinceLast := currentBytes - lastProgressBytes
-			speedBytesPerSec := float64(bytesSinceLast) / elapsed
-			t.Speed = fmt.Sprintf("%.2f MB/s", speedBytesPerSec/(1024*1024))
+	filePath := filepath.Join(libPath, p.FileName)
+	file, err := os.Open(filePath)
+	if err != nil {
+		_ = s.sendUploadError(p.TransferID, "File not found locally")
+		return
+	}
+	defer file.Close()
 
-			lastProgressTime = now
-			lastProgressBytes = currentBytes
-		}
+	fileInfo, err := file.Stat()
+	if err != nil {
+		_ = s.sendUploadError(p.TransferID, "Could not stat file")
+		return
+	}
+	fileSize := fileInfo.Size()
+	partSize := (fileSize + numStreams - 1) / numStreams // Ceiling division
 
+	var wg sync.WaitGroup
+	for i := 0; i < numStreams; i++ {
+		wg.Add(1)
+		go func(partIndex int) {
+			defer wg.Done()
+
+			startByte := int64(partIndex) * partSize
+			if startByte >= fileSize {
+				return
+			}
+			endByte := startByte + partSize
+			if endByte > fileSize {
+				endByte = fileSize
+			}
+
+			session, err := client.NewSession()
+			if err != nil {
+				return
+			}
+			defer session.Close()
+
+			subsystem := fmt.Sprintf("data-transfer:%s:%d", p.TransferID, partIndex)
+			if err := session.RequestSubsystem(subsystem); err != nil {
+				return
+			}
+
+			stdin, err := session.StdinPipe()
+			if err != nil {
+				return
+			}
+
+			partReader := io.NewSectionReader(file, startByte, endByte-startByte)
+			_, _ = io.Copy(stdin, partReader)
+			_ = stdin.Close()
+			_ = session.Wait()
+		}(i)
+	}
+
+	wg.Wait()
+	_ = s.sendUploadDone(p.TransferID)
+}
+
+func (s *Service) startDownload(p transferStartPayload) {
+	s.mu.Lock()
+	libPath := s.libraryPath
+	client := s.client
+	transfer, ok := s.transfers[p.TransferID]
+	if !ok || client == nil {
+		s.mu.Unlock()
+		return
+	}
+	if libPath == "" {
+		transfer.Status = "Failed"
+		transfer.Error = "Library path not set"
 		s.publishTransfers()
 		s.mu.Unlock()
+		return
+	}
+	transfer.Status = "Active"
+	s.publishTransfers()
+	s.mu.Unlock()
+
+	tempDir, err := os.MkdirTemp("", "rosetui-download-")
+	if err != nil {
+		s.updateTransferFailed(p.TransferID, "Failed to create temp dir")
+		return
+	}
+	defer os.RemoveAll(tempDir)
+
+	var totalBytesDownloaded int64
+	var wg sync.WaitGroup
+	partPaths := make([]string, numStreams)
+
+	for i := 0; i < numStreams; i++ {
+		wg.Add(1)
+		go func(partIndex int) {
+			defer wg.Done()
+			partPath := filepath.Join(tempDir, fmt.Sprintf("part-%d", partIndex))
+			partPaths[partIndex] = partPath
+
+			partFile, err := os.Create(partPath)
+			if err != nil {
+				return
+			}
+			defer partFile.Close()
+
+			s.mu.Lock()
+			currentClient := s.client
+			s.mu.Unlock()
+			if currentClient == nil {
+				return
+			}
+
+			session, err := currentClient.NewSession()
+			if err != nil {
+				return
+			}
+			defer session.Close()
+
+			subsystem := fmt.Sprintf("data-transfer:%s:%d", p.TransferID, partIndex)
+			if err := session.RequestSubsystem(subsystem); err != nil {
+				return
+			}
+
+			stdout, err := session.StdoutPipe()
+			if err != nil {
+				return
+			}
+
+			counter := &writeCounter{writer: partFile, total: &totalBytesDownloaded}
+			_, _ = io.Copy(counter, stdout)
+		}(i)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		var lastBytes int64
+		lastTime := time.Now()
+
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				s.mu.Lock()
+				t, ok := s.transfers[p.TransferID]
+				if !ok || t.Status != "Active" {
+					s.mu.Unlock()
+					return
+				}
+				currentBytes := atomic.LoadInt64(&totalBytesDownloaded)
+				now := time.Now()
+				elapsed := now.Sub(lastTime).Seconds()
+				if elapsed > 0.5 && t.Size > 0 {
+					bytesSinceLast := currentBytes - lastBytes
+					speedBytesPerSec := float64(bytesSinceLast) / elapsed
+					t.Speed = fmt.Sprintf("%.2f MB/s", speedBytesPerSec/(1024*1024))
+					t.Progress = float64(currentBytes) / float64(t.Size)
+					lastBytes = currentBytes
+					lastTime = now
+					s.publishTransfers()
+				}
+				s.mu.Unlock()
+			}
+		}
+	}()
+
+	wg.Wait()
+	close(done)
+
+	finalPath := filepath.Join(libPath, p.FileName)
+	finalFile, err := os.Create(finalPath)
+	if err != nil {
+		s.updateTransferFailed(p.TransferID, "Failed to create final file")
+		return
+	}
+	defer finalFile.Close()
+
+	for _, partPath := range partPaths {
+		partFile, err := os.Open(partPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			s.updateTransferFailed(p.TransferID, "Failed to open part file")
+			return
+		}
+		_, err = io.Copy(finalFile, partFile)
+		partFile.Close()
+		if err != nil {
+			s.updateTransferFailed(p.TransferID, "Failed to combine parts")
+			return
+		}
+	}
+
+	if p.Hash != "" {
+		_, _ = finalFile.Seek(0, 0) // Rewind file for reading
+		hasher := sha256.New()
+		if _, err := io.Copy(hasher, finalFile); err != nil {
+			s.updateTransferFailed(p.TransferID, "Failed to hash downloaded file")
+			return
+		}
+		downloadedHash := hex.EncodeToString(hasher.Sum(nil))
+		if downloadedHash != p.Hash {
+			_ = os.Remove(finalPath)
+			s.updateTransferFailed(p.TransferID, "File integrity check failed (hash mismatch)")
+			return
+		}
+	}
+
+	s.updateTransferComplete(p.TransferID)
+}
+
+type writeCounter struct {
+	writer io.Writer
+	total  *int64
+}
+
+func (wc *writeCounter) Write(p []byte) (int, error) {
+	n, err := wc.writer.Write(p)
+	atomic.AddInt64(wc.total, int64(n))
+	return n, err
+}
+
+func (s *Service) updateTransferFailed(transferID, message string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t, ok := s.transfers[transferID]; ok {
+		t.Status = "Failed"
+		t.Error = message
+		t.Progress = 0
+		t.Speed = ""
+		s.publishTransfers()
 	}
 }
+
+func (s *Service) updateTransferComplete(transferID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t, ok := s.transfers[transferID]; ok {
+		t.Status = "Complete"
+		t.Progress = 1.0
+		t.Speed = ""
+		s.publishTransfers()
+	}
+}
+
 func (s *Service) publishTransfers() {
 	var transferList []Transfer
 	for _, t := range s.transfers {
@@ -377,6 +652,7 @@ func (s *Service) publishTransfers() {
 	}
 	s.msgChan <- TransfersUpdateMsg{Transfers: transferList}
 }
+
 func (s *Service) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

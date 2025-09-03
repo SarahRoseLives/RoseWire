@@ -1,8 +1,10 @@
+// tui/transfers_panel.go
 package tui
 
 import (
 	"fmt"
 	"rosetui/ssh"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/table"
@@ -10,14 +12,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// --- Commands ---
-type downloadFileCmd struct{ file ssh.SearchResult }
-type retryDownloadCmd struct{ transfer ssh.Transfer }
-
 type transfersPanelModel struct {
-	transfers     []ssh.Transfer
-	table         table.Model
-	progressBars  map[string]progress.Model // Map transfer ID to its progress bar
+	transfers    []ssh.Transfer
+	table        table.Model
+	progressBars map[string]progress.Model // Map transfer ID to its progress bar
 	width, height int
 }
 
@@ -72,11 +70,12 @@ func (m *transfersPanelModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Handle progress bar animation frames
 	case progress.FrameMsg:
-		// There is no ProgressID or ID method;
-		// Instead, we update all bars with this frame message.
+		// We update all bars with this frame message.
 		for id, bar := range m.progressBars {
 			newModel, cmd := bar.Update(msg)
-			m.progressBars[id] = newModel.(progress.Model)
+			if newBar, ok := newModel.(progress.Model); ok {
+				m.progressBars[id] = newBar
+			}
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -115,17 +114,32 @@ func (m *transfersPanelModel) updateTableRows() {
 }
 
 func (m *transfersPanelModel) View() string {
+	if m.height == 0 {
+		return ""
+	}
 	if len(m.transfers) == 0 {
 		return "\n  No active or recent transfers."
 	}
-	help := "\n'r': retry failed transfer"
-	return m.table.View() + help
+
+	tableView := m.table.View()
+	tableHeight := lipgloss.Height(tableView)
+
+	// The total available panel height is m.height.
+	// We subtract the table's current height to find the space for the filler.
+	fillerHeight := m.height - tableHeight
+	if fillerHeight < 0 {
+		fillerHeight = 0
+	}
+	filler := strings.Repeat("\n", fillerHeight)
+
+	return lipgloss.JoinVertical(lipgloss.Left, tableView, filler)
 }
 
 func (m *transfersPanelModel) SetSize(w, h int) {
 	m.width, m.height = w, h
-	// Table Header(1), Table Border(2), Help(2) = 5
-	m.table.SetHeight(h - 5)
+	// Total panel height is h. The table can use all of it.
+	// The View() function will manage placing the help text at the bottom.
+	m.table.SetHeight(h)
 	m.table.SetWidth(w - 4)
 	// Re-calculate column widths
 	nameWidth := w - 4 - 20 - 15 - 25 - 4 // total - from - status - progress - borders

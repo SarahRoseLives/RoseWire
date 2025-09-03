@@ -12,9 +12,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// A command to request a network stats refresh.
-type requestNetworkStatsCmd struct{}
-
 type networkPanelModel struct {
 	isLoading bool
 	stats     ssh.NetworkStatsMsg
@@ -129,7 +126,7 @@ func (m *networkPanelModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
 
-	// **FIX:** The stats boxes (6 lines) and the header (3 lines) take up 9 lines total.
+	// The stats boxes (6 lines) and the header (3 lines) take up 9 lines total.
 	const fixedHeight = 9
 	m.viewport.Width = w
 	m.viewport.Height = h - fixedHeight
@@ -152,13 +149,13 @@ func (m *networkPanelModel) SetSize(w, h int) {
 // --- Styling ---
 
 type NetworkPanelStyles struct {
-	Spinner         lipgloss.Style
-	Header          lipgloss.Style
-	StatBox         lipgloss.Style
-	UserList        lipgloss.Style
-	StatusOnline    lipgloss.Style
-	StatusOffline   lipgloss.Style
-	Nickname        lipgloss.Style
+	Spinner       lipgloss.Style
+	Header        lipgloss.Style
+	StatBox       lipgloss.Style
+	UserList      lipgloss.Style
+	StatusOnline  lipgloss.Style
+	StatusOffline lipgloss.Style
+	Nickname      lipgloss.Style
 }
 
 func DefaultNetworkPanelStyles() *NetworkPanelStyles {

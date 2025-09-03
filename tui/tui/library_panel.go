@@ -19,24 +19,26 @@ import (
 // --- Commands ---
 type loadLibraryPathCmd struct{}
 type scanLibraryCmd string
-type shareFilesCmd struct{ files []ssh.ShareableFile }
+
+// --- Messages ---
 type libraryScanResultMsg struct{ files []library.LocalFile }
 type libraryPathLoadedMsg string
 type libraryErrMsg struct{ err error }
+type filesHashedMsg struct{ files []ssh.ShareableFile } // Internal message after hashing is done
 
 func (e libraryErrMsg) Error() string { return e.err.Error() }
 
 type libraryPanelModel struct {
-	state         libraryState
-	libraryPath   string
-	files         []library.LocalFile
-	isLoading     bool
-	spinner       spinner.Model
-	table         table.Model
-	textInput     textinput.Model
+	state       libraryState
+	libraryPath string
+	files       []library.LocalFile
+	isLoading   bool
+	spinner     spinner.Model
+	table       table.Model
+	textInput   textinput.Model
 	width, height int
-	styles        *LibraryPanelStyles
-	err           error
+	styles      *LibraryPanelStyles
+	err         error
 }
 
 type libraryState uint
@@ -112,8 +114,11 @@ func (m *libraryPanelModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = nil
 			return m, nil
 		}
-		// If path exists, scan it
-		return m, func() tea.Msg { return scanLibraryCmd(m.libraryPath) }
+		// If path exists, scan it and tell the service about it.
+		return m, tea.Batch(
+			func() tea.Msg { return scanLibraryCmd(m.libraryPath) },
+			func() tea.Msg { return setLibraryPathCmd(m.libraryPath) },
+		)
 
 	case scanLibraryCmd:
 		m.state = stateScanning
@@ -138,11 +143,14 @@ func (m *libraryPanelModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// After scanning, hash the files to share them
 		return m, m.hashAndShareFilesCmd()
 
-	case shareFilesCmd:
+	case filesHashedMsg:
 		m.state = stateReady
 		m.isLoading = false
 		m.err = nil
-		return m, func() tea.Msg { return msg }
+		// Now that internal state is updated, send the command to the parent app model
+		return m, func() tea.Msg {
+			return shareFilesCmd{files: msg.files}
+		}
 
 	case libraryErrMsg:
 		m.err = msg.err
@@ -172,10 +180,19 @@ func (m *libraryPanelModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.table, tblCmd = m.table.Update(msg)
 	cmds = append(cmds, tblCmd)
 
+	if m.isLoading {
+		var spCmd tea.Cmd
+		m.spinner, spCmd = m.spinner.Update(msg)
+		cmds = append(cmds, spCmd)
+	}
+
 	return m, tea.Batch(cmds...)
 }
 
 func (m *libraryPanelModel) View() string {
+	if m.height == 0 {
+		return ""
+	}
 	if m.isLoading {
 		status := "Loading..."
 		switch m.state {
@@ -187,28 +204,40 @@ func (m *libraryPanelModel) View() string {
 		return fmt.Sprintf("\n %s %s", m.spinner.View(), status)
 	}
 
-	var builder strings.Builder
-	builder.WriteString(m.styles.Header.Render("My Shared Library"))
+	var headerBuilder strings.Builder
+	headerBuilder.WriteString(m.styles.Header.Render("My Shared Library"))
 	pathStr := "No folder selected. Press 's' to set."
 	if m.libraryPath != "" {
 		pathStr = m.libraryPath
 	}
-	builder.WriteString(m.styles.Path.Render(pathStr))
+	headerBuilder.WriteString(m.styles.Path.Render(pathStr))
 
 	if m.err != nil {
-		builder.WriteString(m.styles.Error.Render("\nError: " + m.err.Error()))
+		headerBuilder.WriteString(m.styles.Error.Render("\nError: " + m.err.Error()))
 	}
+
+	headerView := headerBuilder.String()
 
 	if m.state == stateSettingPath {
-		builder.WriteString("\n\nEnter new library path and press Enter. (Press Esc to cancel)\n")
-		builder.WriteString(m.textInput.View())
-	} else {
-		builder.WriteString("\n" + m.table.View())
-		help := "\n's': set folder  'r': refresh"
-		builder.WriteString(m.styles.Help.Render(help))
+		// For the settings view, we don't need a filler.
+		return lipgloss.JoinVertical(lipgloss.Left,
+			headerView,
+			"\n\nEnter new library path and press Enter. (Press Esc to cancel)\n",
+			m.textInput.View(),
+		)
 	}
 
-	return builder.String()
+	// For the main table view, calculate filler to push help text down.
+	mainContent := lipgloss.JoinVertical(lipgloss.Left, headerView, m.table.View())
+	contentHeight := lipgloss.Height(mainContent)
+
+	fillerHeight := m.height - contentHeight
+	if fillerHeight < 0 {
+		fillerHeight = 0
+	}
+	filler := strings.Repeat("\n", fillerHeight)
+
+	return mainContent + filler
 }
 
 func (m *libraryPanelModel) updateSettingPath(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -226,6 +255,7 @@ func (m *libraryPanelModel) updateSettingPath(msg tea.KeyMsg) (tea.Model, tea.Cm
 				}
 				return scanLibraryCmd(newPath)
 			},
+			func() tea.Msg { return setLibraryPathCmd(newPath) },
 		)
 	case tea.KeyEsc:
 		m.state = stateReady
@@ -251,7 +281,7 @@ func (m *libraryPanelModel) hashAndShareFilesCmd() tea.Cmd {
 				Hash: hash,
 			})
 		}
-		return shareFilesCmd{files: shareableFiles}
+		return filesHashedMsg{files: shareableFiles}
 	}
 }
 
@@ -260,9 +290,15 @@ func (m *libraryPanelModel) SetSize(w, h int) {
 	m.styles.Header.Width(w)
 	m.styles.Path.Width(w)
 	m.textInput.Width = w - 4
-	// Header(1), Path(1), Table Header(1), Table Border(2), Help(2) = 7
-	m.table.SetHeight(h - 8)
+
+	// Height of non-table elements: Header(2) + Path(2) + potential Error(1) + Table Borders/Header(3) = ~8
+	tableHeight := h - 8
+	if tableHeight < 1 {
+		tableHeight = 1
+	}
+	m.table.SetHeight(tableHeight)
 	m.table.SetWidth(w - 4)
+
 	// Re-calculate column widths
 	nameWidth := (w - 4) - 15 - 3 // total - size col - borders
 	m.table.SetColumns([]table.Column{
@@ -276,7 +312,6 @@ type LibraryPanelStyles struct {
 	Spinner lipgloss.Style
 	Header  lipgloss.Style
 	Path    lipgloss.Style
-	Help    lipgloss.Style
 	Error   lipgloss.Style
 }
 
@@ -285,7 +320,6 @@ func DefaultLibraryPanelStyles() *LibraryPanelStyles {
 		Spinner: lipgloss.NewStyle().Foreground(lipgloss.Color("205")),
 		Header:  lipgloss.NewStyle().Bold(true).Padding(1, 0, 0, 2),
 		Path:    lipgloss.NewStyle().Faint(true).Padding(0, 0, 1, 2),
-		Help:    lipgloss.NewStyle().Faint(true),
 		Error:   lipgloss.NewStyle().Foreground(lipgloss.Color("#E74C3C")),
 	}
 }
